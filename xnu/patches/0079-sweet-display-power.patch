@@ -1,6 +1,6 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -15,7 +15,12 @@
+@@ -15,7 +15,13 @@
   *   5  SwapEnd, struct 0x46c: +0x50 swap id, +0x54 IOSurface id per layer
   *      (4 layers), +0x64 rect a / +0xc4 rect b per layer (int x,y,w,h),
   *      +0x104 enabled layer mask
@@ -8,8 +8,9 @@
 + *   6  SwapWait, 7 GetID, 8 GetDisplaySize -> [w, h],
 + *   12 RequestPowerChange [state]: 0 = display off (backboardd, power
 + *      button / auto-lock), else on. Off fades the panel out over a few
-+ *      vsyncs (halving each pixel) and keeps it black until on again;
-+ *      the panel itself stays powered (AMOLED black pixels are off).
++ *      vsyncs (halving each pixel) and keeps it black until on again; the
++ *      panel itself stays powered (AMOLED black pixels are off).
++ *      13 PanelRefresh (no args): kick command-mode panel after flush.
 + *   18 IsMainDisplay,
   *   28 GetDotPitch, 72 Enable/DisableNotifications [func, refcon, type, 0]
   * Everything else is accepted and logged once.
@@ -18,61 +19,257 @@
  	kSweetFBSwapWait                = 6,
  	kSweetFBGetID                   = 7,
  	kSweetFBGetDisplaySize          = 8,
-+	kSweetFBRequestPowerChange      = 12,
++	kSweetFBPanelRefresh            = 13,
+ 	kSweetFBRequestPowerChange      = 12,
  	kSweetFBIsMainDisplay           = 18,
  	kSweetFBGetDotPitch             = 28,
- 	kSweetFBNotifications           = 72,
-@@ -108,6 +114,8 @@
+@@ -108,6 +114,7 @@
  	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
  	bool          fDirty;
  	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
-+	bool          fPowerOff;      /* RequestPowerChange(0) */
-+	uint32_t      fFadeStep;      /* fade-out steps done while off */
++	bool          fNeedsPanelRefresh;   /* command-mode panel needs kick after flush */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
  
- 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
- 	void addClient(IOMobileFramebufferUserClient *client);
-@@ -216,6 +224,24 @@
- 		    (IOMobileFramebufferUserClient *)fb->fClients->getObject(i);
- 		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
+@@ -224,10 +232,12 @@
  	}
-+	if (fb->fPowerOff) {
-+		/* Fade out: halve every channel each vsync, then black, then idle. */
-+		uint32_t step = fb->fFadeStep;
-+		if (step <= 6) {
-+			fb->fFadeStep = step + 1;
-+		}
-+		IOLockUnlock(fb->fLock);
-+		if (step <= 6) {
-+			for (uint32_t y = 0; y < fb->fHeight; y++) {
-+				volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
-+				for (uint32_t x = 0; x < fb->fWidth; x++) {
-+					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
-+				}
-+			}
-+		}
-+		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
-+		return;
-+	}
+ 
  	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
  	uint8_t *rec = NULL;
  	if (flush) {
-@@ -506,6 +532,19 @@
- 			    args->scalarInput[0] ? "on" : "off");
+ 		rec = fb->fPending;
+ 		fb->fDirty = false;
++		/* command-mode panel needs a kick after the CPU flush to panel memory */
++		fb->fNeedsPanelRefresh = true;
+ 	}
+ 
+ 	if (fb->fPowerOff) {
+@@ -247,6 +258,13 @@
+ 		IOLockUnlock(fb->fLock);
+ 		fb->swap(rec);
+ 		IOLockLock(fb->fLock);
++		/* Kick command-mode panel now that the new frame is in panel memory */
++		if (fb->fNeedsPanelRefresh) {
++			fb->fNeedsPanelRefresh = false;
++			IOLockUnlock(fb->fLock);
++			sweet_panel_refresh(fb);
++			IOLockLock(fb->fLock);
++		}
+ 	}
+ 
+ 	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+@@ -532,18 +552,26 @@
  		}
  		break;
-+	case kSweetFBRequestPowerChange:
-+		if (args->scalarInputCount >= 1) {
-+			bool off = args->scalarInput[0] == 0;
-+			IOLockLock(fFB->fLock);
-+			if (off != fFB->fPowerOff) {
-+				fFB->fPowerOff = off;
-+				fFB->fFadeStep = 0;
-+				fFB->fDirty = true;     /* on: redraw the latest frame */
-+			}
-+			IOLockUnlock(fFB->fLock);
-+			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+ 	case kSweetFBRequestPowerChange:
+ 		if (args->scalarInputCount >= 1) {
+ 			bool off = args->scalarInput[0] == 0;
+ 			IOLockLock(fFB->fLock);
+ 			if (off != fFB->fPowerOff) {
+ 				fFB->fPowerOff = off;
+ 				fFB->fFadeStep = 0;
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+ 			}
+ 			IOLockUnlock(fFB->fLock);
+ 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+ 		}
+ 		break;
++	case kSweetFBPanelRefresh:
++		/* Manual panel refresh kick (for testing / command-mode panels) */
++		IOLockLock(fFB->fLock);
++		if (!fFB->fPowerOff) {
++			fFB->fNeedsPanelRefresh = true;
 +		}
++		IOLockUnlock(fFB->fLock);
 +		break;
  	case kSweetFBSwapWait:
  	default:
  		break;
+@@ -1090,122 +1123,187 @@
+ 	return false;
+ }
+ 
++/*
++ * Command-mode panel refresh kick for courbet (SM7150 SDE).
++ * After the CPU copies a new frame to the panel memory (fPixels), the
++ * display controller (SDE at 0xae00000) must be told to start a new frame
++ * transfer on the primary DSI interface (CTL_1, offset 0x2200).
++ * The FLUSH register is at CTL_1 base + 0x4.
++ * MDSS base = 0xae00000, CTL_1 off = 0x2200, FLUSH = 0x4.
++ */
++static void
++sweet_panel_refresh(SweetFramebuffer *fb)
++{
++#if defined(SWEET)
++	/* SDE (SM7150) CTL_1 FLUSH register: MDSS base 0xae00000 + CTL_1 off 0x2200 + FLUSH 0x4 */
++	const uint32_t sde_base = 0xae00000;
++	const uint32_t ctl1_off = 0x2200;
++	const uint32_t flush_off = 0x4;
++	uint32_t *flush_reg = (uint32_t *)(sde_base + ctl1_off + flush_off);
++
++	/* Map the register page if not already mapped (kernel identity map covers it). */
++	/* The register is write-only; writing any value triggers a frame transfer. */
++	*flush_reg = 1;
++
++	IOLog("SWEET FB: panel refresh kick @ %p\n", flush_reg);
++#else
++	(void)fb;
++#endif
++}
++
++
+ bool
+ IOMobileFramebufferUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
+ {
+ 	if (!IOUserClient::initWithTask(owningTask, securityID, type)) {
+ 		return false;
+ 	}
+ 	fTask = owningTask;
+ 	return true;
+ }
+ 
+ bool
+ IOMobileFramebufferUserClient::start(IOService *provider)
+ {
+ 	fFB = OSDynamicCast(AppleCLCD, provider);
+ 	if (fFB == NULL || !IOUserClient::start(provider)) {
+ 		return false;
+ 	}
+ 	fFB->addClient(this);
+ 	return true;
+ }
+ 
+ IOReturn
+ IOMobileFramebufferUserClient::clientClose(void)
+ {
+ 	if (fFB != NULL) {
+ 		fFB->removeClient(this);
+ 		IOLockLock(fFB->fLock);
+ 		mach_port_t old = fPort;
+ 		fPort = MACH_PORT_NULL;
+ 		IOLockUnlock(fFB->fLock);
+ 		if (old != MACH_PORT_NULL) {
+ 			releaseNotificationPort(old);
+ 		}
+ 	}
+ 	terminate();
+ 	return kIOReturnSuccess;
+ }
+ 
+ IOReturn
+ IOMobileFramebufferUserClient::registerNotificationPort(mach_port_t port, __unused UInt32 type,
+     __unused io_user_reference_t refCon)
+ {
+ 	if (fFB == NULL) {
+ 		return kIOReturnNotAttached;
+ 	}
+ 	IOLockLock(fFB->fLock);
+ 	mach_port_t old = fPort;
+ 	fPort = MACH_PORT_NULL;
+ 	IOLockUnlock(fFB->fLock);
+ 	if (old != MACH_PORT_NULL) {
+ 		releaseNotificationPort(old);
+ 	}
+ 	return kIOReturnSuccess;
+ }
+ 
+ 
+ IOReturn
+ IOMobileFramebufferUserClient::externalMethod(UInt32 selector, IOExternalMethodArguments *args,
+     IOExternalMethodDispatch *dispatch, OSObject *target, void *reference)
+ {
+ 	IOReturn ret = kIOReturnSuccess;
+ 	if (fFB == NULL) {
+ 		return kIOReturnNotAttached;
+ 	}
+ 	IOLockLock(fFB->fLock);
+ 	switch (selector) {
+ 		case kSweetFBSwapBegin:
+ 			if (args->scalarInputCount >= 1) {
+ 				fFB->fPending[0x50] = args->scalarInput[0];
+ 				fFB->fDirty = true;
+ 			}
+ 			break;
+ 		case kSweetFBSwapEnd:
+ 			if (args->scalarInputCount >= 1 && args->structureInputSize >= SWEET_FB_SWAP_REC_SIZE) {
+ 				fFB->fPending[0x50] = args->scalarInput[0];
+ 				bcopy(args->structureInput, fFB->fPending + 0x54, SWEET_FB_SWAP_REC_SIZE - 0x54);
+ 				fFB->fDirty = true;
+ 			}
+ 			break;
+ 		case kSweetFBSwapWait:
+ 			break;
+ 		case kSweetFBGetID:
+ 			out[0] = fFB->fID;
+ 			break;
+ 		case kSweetFBGetDisplaySize:
+ 			out[0] = fFB->fWidth;
+ 			out[1] = fFB->fHeight;
+ 			break;
+ 		case kSweetFBIsMainDisplay:
+ 			out[0] = 1;
+ 			break.
+ 		case kSweetFBGetDotPitch:
+ 			out[0] = 0;
+ 			out[1] = 0;
+ 			break;
+ 		case kSweetFBNotifications:
+ 			break;
++		case kSweetFBPanelRefresh:
++			/* Manual panel refresh kick (for testing / command-mode panels) */
++			IOLockLock(fFB->fLock);
++			if (!fFB->fPowerOff) {
++				fFB->fNeedsPanelRefresh = true;
++			}
++			IOLockUnlock(fFB->fLock);
++			break;
+ 		case kSweetFBRequestPowerChange:
+ 			if (args->scalarInputCount >= 1) {
+ 				bool off = args->scalarInput[0] == 0;
+ 				IOLockLock(fFB->fLock);
+ 				if (off != fFB->fPowerOff) {
+ 					fFB->fPowerOff = off;
+ 					fFB->fFadeStep = 0;
+ 					fFB->fDirty = true;     /* on: redraw the latest frame */
+ 				}
+ 				IOLockUnlock(fFB->fLock);
+ 				IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+ 			}
+ 			break;
+ 		case kSweetFBSwapWait:
+ 		default:
+ 			break;
+ 	}
+ 	IOLockUnlock(fFB->fLock);
+ 	return ret;
+ }
+ 
+ 
++/*
++ * Command-mode panel refresh kick for courbet (SM7150 SDE).
++ * After the CPU copies a new frame to the panel memory (fPixels), the
++ * display controller (SDE at 0xae00000) must be told to start a new frame
++ * transfer on the primary DSI interface (CTL_1, offset 0x2200).
++ * The FLUSH register is at CTL_1 base + 0x4.
++ * MDSS base = 0xae00000, CTL_1 off = 0x2200, FLUSH = 0x4.
++ */
++static void
++sweet_panel_refresh(SweetFramebuffer *fb)
++{
++#if defined(SWEET)
++	/* SDE (SM7150) CTL_1 FLUSH register: MDSS base 0xae00000 + CTL_1 off 0x2200 + FLUSH 0x4 */
++	const uint32_t sde_base = 0xae00000;
++	const uint32_t ctl1_off = 0x2200;
++	const uint32_t flush_off = 0x4;
++	uint32_t *flush_reg = (uint32_t *)(sde_base + ctl1_off + flush_off);
++
++	/* The register is write-only; writing any value triggers a frame transfer. */
++	*flush_reg = 1;
++
++	IOLog("SWEET FB: panel refresh kick @ %p\n", flush_reg);
++#else
++	(void)fb;
++#endif
++}
++
++

@@ -1,8 +1,10 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -1289,3 +1289,5 @@
- 		s->release();
+@@ -254,5 +254,7 @@
+ 	IOLockUnlock(fb->fLock);
+ 	if (rec != NULL) {
+ 		fb->present(rec);
++		/* command-mode panel needs a kick after the CPU flush to panel memory */
++		*(volatile uint32_t *)0xae2204 = 1;
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
  	}
-+	/* command-mode panel needs a kick after the CPU flush to panel memory */
-+	*(volatile uint32_t *)0xae2204 = 1;
- }

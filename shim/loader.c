@@ -85,6 +85,14 @@ const char *loader_boot(uintptr_t dtb)
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
 
+	/* Live RAM top from the FDT ABL handed us. */
+	uint64_t ram_top = 0;
+	int have_top = fdt_memory_top(dtb, &ram_top);
+	if (have_top)
+		con_hex("RAMTOP", ram_top);
+	else
+		con_str("RAMTOP", "no /memory node in the live FDT");
+
 	const struct payload *p = (const struct payload *)rd_start;
 	if (!magic_ok(p->magic))
 		return "no SWEETXNU payload";
@@ -98,12 +106,8 @@ const char *loader_boot(uintptr_t dtb)
 
 	/* The ADT's RAM window must exist in the live FDT: a 6 GB phone booted
 	 * with an 8 GB ADT (or vice versa) would corrupt memory silently. */
-	uint64_t ram_top = 0;
-	if (fdt_memory_top(dtb, &ram_top)) {
-		con_hex("RAMTOP", ram_top);
-		if (p->phys_base + p->mem_size + 0x100000ULL > ram_top)
-			return "payload RAM exceeds live RAM (mkadt --mem 6|8)";
-	}
+	if (have_top && p->phys_base + p->mem_size + 0x100000ULL > ram_top)
+		return "payload RAM exceeds live RAM (mkadt --mem 6|8)";
 
 	/* The payload must not overlap where the kernel goes. */
 	if (rd_end > p->phys_base && rd_start < p->phys_base + p->mem_size)

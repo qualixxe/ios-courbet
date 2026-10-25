@@ -47,6 +47,35 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
   `git -c credential.helper= push https://x-access-token:$t@github.com/... main`.
   Docs-only pushes do **not** start CI (`paths:` is `xnu/patches/**` + the
   workflow file).
+- **CI run `40176742478`** (shim workflow, commit `02e8164`) → `success`: the shim
+  cross-compiles (`gcc-aarch64-linux-gnu`), links with **0 absolute relocations**,
+  packs a header-v2 boot.img and the round-trip check (`cmp` kernel/ramdisk/dtb)
+  passes. https://github.com/qualixxe/ios-courbet/actions/runs/40176742478
+  Two bugs were in the way and are fixed in `shim/build.sh` (via
+  `research/apply_port_edits.py`, so provenance stays honest):
+  `awk … strtonum("0x"$1)` — `strtonum` is **gawk-only**, Debian/Ubuntu ship mawk,
+  so the size came out empty and `truncate` died (now `size=$((16#$hex))`);
+  and `mkbootimg` was unconditional, so a build without the stock DTB failed.
+  **`mkbootimg` is not on PyPI** (404) and not in apt — `tools/aosp/` now vendors
+  AOSP `mkbootimg.py` from `android-12.0.0_r1` (sha256 `2a8d05d3…`, byte-identical,
+  Apache-2.0) plus a 3-line `mkbootimg` wrapper; `android-13+` imports
+  `gki.generate_gki_certificate` and would drag in the whole AOSP tree.
+- **Boot images built and verified** (CI has no DTB, this machine has no compiler —
+  so CI compiles, here repacks):
+  ```
+  shim/out/shim-boot-courbet-diag.img   589 824 B  sha256 3334307c64a978d6…
+  shim/out/shim-boot-courbet-xnu6g.img  17 199 104 B sha256 50cf9d9c88fea91b…
+  ```
+  Both = shim `Image` (180 224 B from the `shim` artifact) + the stock
+  `research/shirayuki-oem/dtb.img` (398 043 B, verified **single** FDT: magic
+  `0xd00dfeed`, `totalsize == filesize`). `diag` uses the empty-cpio ramdisk (97 B)
+  from CI; `xnu6g` uses `shim/out/payload-6g.bin` (16 610 976 B) =
+  `kernel.development.sweet` from run `40175356689` (sha256 `b2c7364e…`, matches its
+  `SHA256SUMS`) + `research/courbet-6g.adt` (`--highmem --mem 6`) with cmdline
+  `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress`.
+  Every part was `cmp`'d after packing. Recipe for a new pair:
+  download the `shim` artifact → `python tools/unpack_bootv2.py` it to get
+  `Image`+`ramdisk` → `python tools/aosp/mkbootimg.py … --dtb <stock dtb.img>`.
 
 **What was changed (and verified locally)**
 
@@ -91,9 +120,9 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 
 **Not done / not verified**
 
-- No shim compile (no `aarch64-linux-gnu-gcc` here) and no device. The XNU build
-  *and* the full-series apply against a clean `xnu-8796` are now covered by CI
-  (run #2, 81/81 patches).
+- No device. The XNU build, the full-series apply against a clean `xnu-8796`, and
+  the shim compile+pack are now covered by CI (runs #2 and `40176742478`); what is
+  left unproven is everything that needs the phone: boot, console, display, touch.
 - **`courbet_touch_mv` default of 1648 mV is derived** from the DTB's
   `qcom,init-voltage = <0x192580>` for `pm6150l_l6`, because the stock ST driver only
   calls `regulator_enable()` and never sets a voltage. `regulator-min/max` are
@@ -113,12 +142,12 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 
 **Next action (in order)**
 
-1. Identify the touch controller (T5) — decides whether T4 is needed at all.
-   (`adb shell dumpsys input | grep -iE "fts|goodix|spits"`, or the stock DT.)
-2. Build the shim: `DTB=<stock dtb.img> shim/build.sh` (needs
-   `aarch64-linux-gnu-gcc` + `mkbootimg`, i.e. WSL or CI — M6).
-3. `fastboot boot`; the new `RAMTOP` line gives the live RAM size and settles
-   `--mem` (M7).
+1. `fastboot boot shim/out/shim-boot-courbet-diag.img` — read `RAMTOP`, the UFS
+   probe and the MMU lines (M7). This settles `--mem` for the ADT.
+2. `fastboot boot shim/out/shim-boot-courbet-xnu6g.img` — same shim + XNU
+   (`--mem 6`, safe on 6 and 8 GB; rebuild with `--mem 8` if `RAMTOP` says 8 GB).
+3. Identify the touch controller (T5): `adb shell dumpsys input | grep -iE
+   "fts|goodix|spits"` — decides whether T4 (SPI Berlin) is needed at all.
 
 **Conventions kept**
 

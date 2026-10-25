@@ -14,8 +14,8 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M4 | ADT builder produces a valid courbet ADT | **done** | `mkadt.py --highmem --mem 6\|8` → 10 112 B, `dram-size 0xfcb00000` / `0x17cb00000`, root `compatible` = `D22AP, iPhone10,3, xiaomi,courbet, xiaomi,sweet, qcom,sm7150, AppleARM` |
 | M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **done** | run `40175356689` (`0ddcae0`) → `success`, 6 min 39 s, and the log proves the series landed: `expected=81 applied=81 skipped=0`, `all 81 ios-courbet patches applied`; banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel`. The **first** run `40173726660` (`afb307b`) was green *but* silently skipped `0063` (`corrupt patch at line 27`) — see M5b. |
 | M5b | CI must fail when one of our patches is skipped | **done, proven both ways** | step `Verify ios-courbet patches applied` after `Build`. Replaying its rule on run #1's log gives `expected=81 applied=80 skipped=1` → fails; on run #2 it gives `81/81/0` → passes. blacktop's own four patches (`TrustCache`, `iobuffermemd_monterey`, `skywalk_sonoma`, `syntax_checker_sonoma`) are skipped on every run and are deliberately not counted. |
-| M6 | Build the shim (`shim/build.sh`) | **in progress** | new `shim` workflow (ubuntu-latest, `gcc-aarch64-linux-gnu` + pip `mkbootimg` + `dtc`) compiles, links, packs with a **stub** DTB and verifies the boot.img round-trips byte-for-byte. `build.sh` no longer needs gawk (`strtonum`) and no longer hard-requires a DTB/mkbootimg. A real boot.img still needs the stock `dtb.img` (device dump, not in git). |
-| M7 | `fastboot boot` the shim, confirm console output | **blocked** | no device |
+| M6 | Build the shim (`shim/build.sh`) | **done** | run `40176742478` (`02e8164`) → `success`: cross-compiles with `gcc-aarch64-linux-gnu`, links with no absolute relocations, packs a header-v2 boot.img with a stub DTB, and the round-trip check (`cmp` kernel/ramdisk/dtb) passes. Needs `dtc` + a DTB; CI uses `tools/aosp/mkbootimg` (AOSP script, vendored, because `mkbootimg` is **not** on PyPI and not in apt). |
+| M7 | `fastboot boot` the shim, confirm console output | **ready, needs the phone** | two images built and verified (parts `cmp`'d after packing): `shim/out/shim-boot-courbet-diag.img` 589 824 B sha256 `3334307c…` and `shim/out/shim-boot-courbet-xnu6g.img` 17 199 104 B sha256 `50cf9d9c…`. Both embed the stock `dtb.img` (398 043 B, single FDT) and the CI-built shim `Image` (180 224 B). Blocked only on an unlocked bootloader + `fastboot`. |
 | M8 | XNU boots to panic log / early console | **blocked** | needs M7 |
 | M9 | Display shows frames (command-mode risk) | **blocked** | see D1 |
 | M10 | Touch | **blocked** | see T1/T3 |
@@ -90,8 +90,17 @@ it cannot prove the series applies to a pristine `xnu-8796` — CI does that, an
 
 ## Next concrete action
 
-1. Identify the unit's touch controller (T5) — decides whether T4 is required.
-2. Build the shim (M6) in WSL: `shim/build.sh` with `DTB=` pointing at the stock
-   `dtb.img`.
-3. `fastboot boot` it (M7) — the console now also prints `RAMTOP`, which tells us the
-   live RAM size and settles the `--mem` question in one shot.
+**Images are built and waiting for the phone** (see M7):
+
+```
+fastboot boot shim/out/shim-boot-courbet-diag.img     # 1st: RAMTOP + UFS probe + MMU
+fastboot boot shim/out/shim-boot-courbet-xnu6g.img    # 2nd: same shim + XNU payload
+```
+
+1. The diagnostic image is the important one: it prints `RAMTOP` (settles `--mem 6`
+   vs `8`), the UFS probe result, and the MMU/framebuffer lines, then resets after
+   ~3 min. Film it or photograph the screen.
+2. The XNU image carries an ADT built with `--mem 6`, which is safe on a 6 GB unit
+   and works on an 8 GB one (the shim refuses a window larger than live RAM).
+   Rebuild with `--mem 8` only after `RAMTOP` says 8 GB.
+3. Identify the unit's touch controller (T5) — decides whether T4 is required.

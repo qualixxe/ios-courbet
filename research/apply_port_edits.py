@@ -114,19 +114,30 @@ if 'fdt_memory_top' not in text:
     print('patched shim/fdt.c')
 
 # ---------------------------------------------------------------- shim/loader.c
-edit('shim/loader.c', [(
-    "\tcon_hex(\"ENTRY\", p->entry_va);\n",
-    "\tcon_hex(\"ENTRY\", p->entry_va);\n"
-    "\n"
-    "\t/* The ADT's RAM window must exist in the live FDT: a 6 GB phone booted\n"
-    "\t * with an 8 GB ADT (or vice versa) would corrupt memory silently. */\n"
-    "\tuint64_t ram_top = 0;\n"
-    "\tif (fdt_memory_top(dtb, &ram_top)) {\n"
-    "\t\tcon_hex(\"RAMTOP\", ram_top);\n"
-    "\t\tif (p->phys_base + p->mem_size + 0x100000ULL > ram_top)\n"
-    "\t\t\treturn \"payload RAM exceeds live RAM (mkadt --mem 6|8)\";\n"
-    "\t}\n",
-)])
+# The live RAM top is read and printed *before* the payload is parsed: the
+# diagnostic image (no payload) must still report it, because that line is what
+# settles `mkadt --mem 6|8` on a new unit.
+edit('shim/loader.c', [
+    (' * Milestone 4: act as iBoot for xnu.\n',
+     ' * Milestone 4: act as iBoot for xnu on courbet.\n'),
+    ("\tcon_hex2(\"INITRD\", \"lo=\", rd_start, \"hi=\", rd_end);\n",
+     "\tcon_hex2(\"INITRD\", \"lo=\", rd_start, \"hi=\", rd_end);\n"
+     "\n"
+     "\t/* Live RAM top from the FDT ABL handed us. */\n"
+     "\tuint64_t ram_top = 0;\n"
+     "\tint have_top = fdt_memory_top(dtb, &ram_top);\n"
+     "\tif (have_top)\n"
+     "\t\tcon_hex(\"RAMTOP\", ram_top);\n"
+     "\telse\n"
+     "\t\tcon_str(\"RAMTOP\", \"no /memory node in the live FDT\");\n"),
+    ("\tcon_hex(\"ENTRY\", p->entry_va);\n",
+     "\tcon_hex(\"ENTRY\", p->entry_va);\n"
+     "\n"
+     "\t/* The ADT's RAM window must exist in the live FDT: a 6 GB phone booted\n"
+     "\t * with an 8 GB ADT (or vice versa) would corrupt memory silently. */\n"
+     "\tif (have_top && p->phys_base + p->mem_size + 0x100000ULL > ram_top)\n"
+     "\t\treturn \"payload RAM exceeds live RAM (mkadt --mem 6|8)\";\n"),
+])
 
 # ---------------------------------------------------------------- shim/shim.c
 edit('shim/shim.c', [

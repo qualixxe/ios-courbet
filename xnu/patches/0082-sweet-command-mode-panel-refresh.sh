@@ -5,7 +5,10 @@
 # (MDSS base 0xae00000 + CTL_1 offset 0x2200 + FLUSH 0x4 = 0xae2204).
 set -euo pipefail
 
-FILE="${WORK_DIR}/xnu/iokit/Kernel/arm/SweetFramebuffer.cpp"
+# Derive WORK_DIR from the script's location (dxb/patches/ -> dxb/ -> WORK_DIR)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORK_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+FILE="$WORK_DIR/xnu/iokit/Kernel/arm/SweetFramebuffer.cpp"
 
 python3 - "$FILE" <<'PY'
 import sys

@@ -29,8 +29,8 @@
  void
  AppleCLCD::swap(const uint8_t *rec)
  {
-@@ -1291,6 +1324,8 @@
- 	s->release();
+@@ -1289,6 +1322,8 @@
+ 		s->release();
  	}
 +	/* command-mode panel needs a kick after the CPU flush to panel memory */
 +	sweet_panel_refresh();

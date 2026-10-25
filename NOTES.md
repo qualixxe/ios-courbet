@@ -129,14 +129,14 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
   1 648 000…3 100 000, so 3000 mV is legal if touch stays dead.
 - **8 GB upper bank `0x17cc00000` is derived** (2G + 8G − 0x3400000), not read off a
   live 8 GB unit. `0x3400000` top reserve is carried over from sweet.
-- **Command-mode display (D1)** — **confirmed freeze**, fix in progress:
+- **Command-mode display (D1)** - **confirmed freeze**, fix in progress:
   courbet panels are `*_dsc_cmd` (TE tlmm 10, reset PM6150L GPIO 9); sweet was
   video-mode. First boot (`shim-boot-courbet-xnu6g.img`) reached XNU, printed
-  `SWEET FB: swap ...` and then froze — CPU writes frame to panel memory but
+  `SWEET FB: swap ...` and then froze - CPU writes frame to panel memory but
   command-mode DSI panel doesn't update. Fix: added `sweet_panel_refresh()` in
-  `0079-sweet-display-power.patch` that writes SDE CTL_1 FLUSH register
-  (0xae00000 + 0x2200 + 0x4 = 0xae2204) after each vsync flush. CI run building
-  (commit `7f1ea31`).
+  new patch `0082-sweet-command-mode-panel-refresh.patch` that writes SDE CTL_1
+  FLUSH register (0xae2204) after each vsync flush. CI run building
+  (commit `60849f8`).
 - **Touch controller variant unknown.** courbet's defconfig compiles
   `CONFIG_TOUCHSCREEN_FTS=y` (I²C `0x49`, `st,fts`) and
   `CONFIG_TOUCHSCREEN_GOODIX_BRL=y` (SPI Berlin via `xiaomi-spits`). The I²C

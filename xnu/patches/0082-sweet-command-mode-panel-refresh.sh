@@ -11,8 +11,8 @@ python3 - "$FILE" <<'PY'
 import sys
 path = sys.argv[1]
 s = open(path, 'r').read()
-old = '\tfb->present(rec);\n\t\tIOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);'
-new = '\tfb->present(rec);\n\t\t/* command-mode panel needs a kick after the CPU flush to panel memory */\n\t\t*(volatile uint32_t *)0xae2204 = 1;\n\t\tIOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);'
+old = '\t\tfb->present(rec);\n\t\tIOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);'
+new = '\t\tfb->present(rec);\n\t\t/* command-mode panel needs a kick after the CPU flush to panel memory */\n\t\t*(volatile uint32_t *)0xae2204 = 1;\n\t\tIOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);'
 if old not in s:
     print('ERROR: anchor not found', file=sys.stderr)
     sys.exit(1)

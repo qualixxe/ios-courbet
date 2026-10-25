@@ -5,7 +5,7 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
-## Handoff (2026-10-25) — port scaffold complete, nothing built or booted
+## Handoff (2026-10-25) - XNU and shim both build in CI; two fastboot images ready
 
 **Where the tree is**
 
@@ -47,10 +47,10 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
   `git -c credential.helper= push https://x-access-token:$t@github.com/... main`.
   Docs-only pushes do **not** start CI (`paths:` is `xnu/patches/**` + the
   workflow file).
-- **CI run `40176742478`** (shim workflow, commit `02e8164`) → `success`: the shim
+- **CI run `40177122514`** (shim workflow, commit `0d6750a`) → `success`: the shim
   cross-compiles (`gcc-aarch64-linux-gnu`), links with **0 absolute relocations**,
   packs a header-v2 boot.img and the round-trip check (`cmp` kernel/ramdisk/dtb)
-  passes. https://github.com/qualixxe/ios-courbet/actions/runs/40176742478
+  passes. https://github.com/qualixxe/ios-courbet/actions/runs/40177122514
   Two bugs were in the way and are fixed in `shim/build.sh` (via
   `research/apply_port_edits.py`, so provenance stays honest):
   `awk … strtonum("0x"$1)` — `strtonum` is **gawk-only**, Debian/Ubuntu ship mawk,
@@ -63,8 +63,8 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 - **Boot images built and verified** (CI has no DTB, this machine has no compiler —
   so CI compiles, here repacks):
   ```
-  shim/out/shim-boot-courbet-diag.img   589 824 B  sha256 3334307c64a978d6…
-  shim/out/shim-boot-courbet-xnu6g.img  17 199 104 B sha256 50cf9d9c88fea91b…
+  shim/out/shim-boot-courbet-diag.img   589 824 B  sha256 5f731d2f15b162b497a1f202100ff7f7d959c7ac68718d59ac6f46965a82bc03
+  shim/out/shim-boot-courbet-xnu6g.img  17 199 104 B sha256 55d052eb00b3c9bfb3c42d5a645bd84652aaca25511493a0c20fbebb48d55cda
   ```
   Both = shim `Image` (180 224 B from the `shim` artifact) + the stock
   `research/shirayuki-oem/dtb.img` (398 043 B, verified **single** FDT: magic

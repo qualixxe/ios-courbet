@@ -10,7 +10,7 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M0 | Read ios-sweet (`README`, `AGENTS.md`, `site/porting.html`, `NOTES-sweet.md`) | **done** | clone `ios-sweet-upstream` @ `45263be`, read-only |
 | M1 | Collect courbet facts from real DTB/DTBO + `courbet-r-oss` sources | **done** | `docs/COURBET_HARDWARE.md` |
 | M2 | Port scaffold: tree copied, device layer edited | **done** | this repo |
-| M3 | Patch chain still applies after the edits | **done** | `python research/verify_patches.py` → `665 lines, chain OK` |
+| M3 | Patch chain still applies after the edits | **done** | `python research/verify_patches.py` → `668 lines, chain OK` |
 | M4 | ADT builder produces a valid courbet ADT | **done** | `mkadt.py --highmem --mem 6\|8` → 10 112 B, `dram-size 0xfcb00000` / `0x17cb00000`, root `compatible` = `D22AP, iPhone10,3, xiaomi,courbet, xiaomi,sweet, qcom,sm7150, AppleARM` |
 | M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **done, but with a miss** | run `40173726660` → `success` (7 min 15 s, macos-14), banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel` 60 MB. **However `0063` was silently skipped**: `error: corrupt patch at line 27` — I grew a hunk without updating `@@ -32,6 +32,11 @@`, and blacktop's apply loop only *warns* and continues. The kernel therefore built without the GENI packing fix. Header corrected in the tree; a second run re-verifies. |
 | M5b | CI must fail when one of our patches is skipped | **done** | new step `Verify ios-courbet patches applied` right after `Build`: counts `Applying patch` / `Skipping patch` lines for `xnu/patches/*.patch` and fails if they disagree. Turns the 0063 class of bug from a silent green into a red build. |

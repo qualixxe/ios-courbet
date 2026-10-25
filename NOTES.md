@@ -64,11 +64,13 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 **Verification done here**
 
 - `research/apply_port_edits.py`, `research/fix_touch_rails.py`,
-  `research/fix_hunks.py` — the edits themselves (re-runnable, they skip if applied).
+  `research/fix_hunks.py` — the edits themselves (re-runnable, they skip if
+  applied; `fix_hunks.py` is the two-pass header check over all 81 patches).
 - `research/verify_patches.py` — reconstructs `bsd/dev/sweet_touch.c` from `0060`
-  and replays `0062` → `0063`: **`665 lines, chain OK`**.
-- Hunk headers re-counted for `0060`, `0062`, `0063`: all match their bodies
-  (`0062 @@ -490,16 +491,31 @@` was corrected after the power block grew).
+  and replays `0062` → `0063`: **`668 lines, chain OK`**.
+- Hunk headers re-counted for **all 81** `xnu/patches/*.patch` by
+  `research/fix_hunks.py`, twice, 0 corrections (`0062 @@ -490,16 +491,31 @@` and
+  `0063 @@ -32,6 +32,14 @@` were corrected after their hunks grew).
 - `mkadt.py` run for both `--mem 6` and `--mem 8`.
 
 **Not done / not verified**

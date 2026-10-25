@@ -15,7 +15,8 @@ Sources:
 | Stock touch drivers | `src/fts.c`, `src/goodix.c` | what the shipping kernel actually binds |
 | Stock defconfig | `arch/arm64/configs/vendor/courbet_user_defconfig` | which touch driver is compiled in |
 
-`research/` and `src/` are git-ignored (device dumps and third-party sources).
+`research/*` and `src/` are git-ignored (device dumps and third-party sources;
+`research/*.py` — the port's own tooling — is tracked).
 
 ---
 

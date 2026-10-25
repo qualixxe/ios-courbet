@@ -80,11 +80,12 @@ xnu/patches/     81 patches against xnu-8796 (see xnu/patches/index)
 tools/           ADT / payload / rootfs builders
 docs/            courbet hardware notes, port status
 site/            project page (inherited from ios-sweet)
-research/        device dumps, decompiled DTS, source pulls (git-ignored)
+research/        device dumps, decompiled DTS, source pulls (git-ignored;
+                 research/*.py are tracked — they reproduce the port edits)
 src/             courbet kernel DTS + the stock touch drivers (git-ignored)
 NOTES-sweet.md   the ios-sweet engineering log (historical reference)
 ```
 
 `research/` and `src/` hold device dumps, decompiled DTs and Xiaomi kernel sources.
-They are git-ignored; the facts extracted from them live in
-[`docs/COURBET_HARDWARE.md`](docs/COURBET_HARDWARE.md).
+They are git-ignored apart from `research/*.py`; the facts extracted from them live
+in [`docs/COURBET_HARDWARE.md`](docs/COURBET_HARDWARE.md).

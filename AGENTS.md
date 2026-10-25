@@ -17,9 +17,11 @@
   (DTB property, kernel source file, line). Distinguish *verified from the device
   tree*, *derived*, and *guessed* — the memory numbers in particular are partly
   derived. Do not turn a guess into a comment that reads like a fact.
-- `research/` and `src/` are git-ignored: device dumps, decompiled DTs, Xiaomi
+- `research/*` and `src/` are git-ignored: device dumps, decompiled DTs, Xiaomi
   kernel sources, Apple artifacts. Keep them out of git; extract the facts into
-  `docs/` instead.
+  `docs/` instead. The exception is `research/*.py` (tracked), because those are
+  the scripts that reproduce and validate the port — everything else in
+  `research/` stays local.
 - Update the active handoff in `NOTES.md` after each milestone and before stopping.
   Record commits, CI run IDs, exact build/boot results and unfinished work.
   Distinguish observations from guesses.
@@ -35,5 +37,10 @@
   `shim/console.h`, `shim/build.sh`, `tools/mkpayload.py` (docstring),
   `xnu/patches/0060`, `0062`, `0063`.
   Reproduce those edits with `research/apply_port_edits.py` +
-  `research/fix_touch_rails.py`; validate the patch chain with
-  `research/verify_patches.py`.
+  `research/fix_touch_rails.py`; then the gate, which must all exit 0:
+  `python research/fix_hunks.py` twice (0 headers corrected),
+  `python research/verify_patches.py` (`668 lines, chain OK`),
+  `python research/brace_check.py`.
+  CI is the only check that the whole series applies to a pristine
+  `xnu-8796` — and the `Verify ios-courbet patches applied` step exists
+  because blacktop's apply loop only *warns* and skips a bad patch.

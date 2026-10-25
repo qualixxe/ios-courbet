@@ -29,7 +29,7 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | # | Item | State | Notes |
 | --- | --- | --- | --- |
 | D0 | FB base / size / stride correct for courbet | **done** | `0x9c000000`, 1080×2400, `cont_splash` `0x1700000` — verified in the courbet DTB |
-| D1 | Command-mode panel picks up CPU framebuffer writes | **blocked** | courbet panels are `*_dsc_cmd` (TE on tlmm 10, reset PM6150L GPIO 9); sweet's was video-mode. **First boot to test:** does the splash keep updating? If it freezes, add a DSI refresh kick (IOMFB/kern_RequestPowerChange style — sweet already has this machinery in `0079`) |
+| D1 | Command-mode panel picks up CPU framebuffer writes | **in progress** | courbet panels are `*_dsc_cmd` (TE on tlmm 10, reset PM6150L GPIO 9); sweet's was video-mode. **First boot showed freeze** after `SWEET FB: swap ...` — CPU writes frame but panel doesn't update. Fix: added `sweet_panel_refresh()` in 0079 that writes SDE CTL_1 FLUSH (0xae2204) after vsync flush. CI run building. |
 | D2 | Panel ID detected at runtime | **todo** | stock cmdline has no `msm_drm.dsi_display0`; verify from the kernel log |
 
 ## T — touch

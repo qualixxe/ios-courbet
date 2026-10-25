@@ -12,8 +12,8 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M2 | Port scaffold: tree copied, device layer edited | **done** | this repo |
 | M3 | Patch chain still applies after the edits | **done** | `python research/verify_patches.py` → `668 lines, chain OK` |
 | M4 | ADT builder produces a valid courbet ADT | **done** | `mkadt.py --highmem --mem 6\|8` → 10 112 B, `dram-size 0xfcb00000` / `0x17cb00000`, root `compatible` = `D22AP, iPhone10,3, xiaomi,courbet, xiaomi,sweet, qcom,sm7150, AppleARM` |
-| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **done, but with a miss** | run `40173726660` → `success` (7 min 15 s, macos-14), banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel` 60 MB. **However `0063` was silently skipped**: `error: corrupt patch at line 27` — I grew a hunk without updating `@@ -32,6 +32,11 @@`, and blacktop's apply loop only *warns* and continues. The kernel therefore built without the GENI packing fix. Header corrected in the tree; a second run re-verifies. |
-| M5b | CI must fail when one of our patches is skipped | **done** | new step `Verify ios-courbet patches applied` right after `Build`: counts `Applying patch` / `Skipping patch` lines for `xnu/patches/*.patch` and fails if they disagree. Turns the 0063 class of bug from a silent green into a red build. |
+| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **done** | run `40175356689` (`0ddcae0`) → `success`, 6 min 39 s, and the log proves the series landed: `expected=81 applied=81 skipped=0`, `all 81 ios-courbet patches applied`; banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel`. The **first** run `40173726660` (`afb307b`) was green *but* silently skipped `0063` (`corrupt patch at line 27`) — see M5b. |
+| M5b | CI must fail when one of our patches is skipped | **done, proven both ways** | step `Verify ios-courbet patches applied` after `Build`. Replaying its rule on run #1's log gives `expected=81 applied=80 skipped=1` → fails; on run #2 it gives `81/81/0` → passes. blacktop's own four patches (`TrustCache`, `iobuffermemd_monterey`, `skywalk_sonoma`, `syntax_checker_sonoma`) are skipped on every run and are deliberately not counted. |
 | M6 | Build the shim (`shim/build.sh`) | **todo** | needs `aarch64-linux-gnu-gcc` + `mkbootimg` (WSL or CI). Not compiled since the `fdt_memory_top` addition. |
 | M7 | `fastboot boot` the shim, confirm console output | **blocked** | no device |
 | M8 | XNU boots to panic log / early console | **blocked** | needs M7 |
@@ -21,8 +21,8 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M10 | Touch | **blocked** | see T1/T3 |
 | M11 | iOS root in `userdata`, home screen | **blocked** | needs M9 + M10 |
 
-**Nothing has been flashed to a courbet device.** No build of the XNU kernel or of the
-shim has been produced in this tree yet.
+**Nothing has been flashed to a courbet device.** The XNU kernel builds in CI
+(M5, all 81 patches applied); the shim has not been compiled in this tree yet (M6).
 
 ## D — display
 
@@ -58,7 +58,7 @@ shim has been produced in this tree yet.
 python research/apply_port_edits.py      # shim/fdt.{c,h}, loader.c, shim.c, build.sh,
                                          # mkadt.py, mkpayload.py, 0062 comment, 0063 note
 python research/fix_touch_rails.py       # 0060 + 0062: GPIO72, LDO6, 4250 mAh
-python research/fix_hunks.py             # recomputed the one hunk header that grew
+python research/fix_hunks.py             # all 81 patches, two passes, 0 corrections
 python research/verify_patches.py        # 0060 → 0062 → 0063 on sweet_touch.c: OK
 python research/brace_check.py           # fdt.c/fdt.h/loader.c/shim.c balance
 python tools/mkadt.py --highmem --mem 6  # ADT parses, dram-base/size correct
@@ -91,10 +91,7 @@ it cannot prove the series applies to a pristine `xnu-8796` — CI does that, an
 ## Next concrete action
 
 1. Identify the unit's touch controller (T5) — decides whether T4 is required.
-2. Push and run the `xnu` workflow (`MACHINE_CONFIG=SWEET`) to get M5, and confirm the
-   full patch series applies to a clean `xnu-8796`. **This is the first thing that can
-   fail and can be checked without hardware.**
-3. Build the shim (M6) in WSL: `shim/build.sh` with `DTB=` pointing at the stock
+2. Build the shim (M6) in WSL: `shim/build.sh` with `DTB=` pointing at the stock
    `dtb.img`.
-4. `fastboot boot` it (M7) — the console now also prints `RAMTOP`, which tells us the
+3. `fastboot boot` it (M7) — the console now also prints `RAMTOP`, which tells us the
    live RAM size and settles the `--mem` question in one shot.

@@ -12,6 +12,14 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 - `ios-courbet/` = full ios-sweet tree + courbet device layer + `research/` + `src/`.
 - `ios-sweet-upstream/` = untouched upstream, keep it for diffing.
 - `site/` still says ios-sweet everywhere — deliberately untouched for now.
+- **Repo: https://github.com/qualixxe/ios-courbet** (public, created 2026-10-25,
+  push credential `qualixxe` via Git Credential Manager; `gh` is not installed —
+  GitHub REST calls go through `git credential fill` + `Invoke-RestMethod`).
+  Initial commit `afb307b`, 144 files, `research/` + `src/` excluded.
+- **CI run `40173726660`** (`xnu`, push-triggered, macos-14, 120 min timeout):
+  https://github.com/qualixxe/ios-courbet/actions/runs/40173726660 — this is
+  milestone M5, it answers whether the edited patch series still applies to a
+  clean xnu-8796. Result: **see below when it lands**.
 
 **What was changed (and verified locally)**
 
@@ -76,9 +84,11 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 **Next action (in order)**
 
 1. Identify the touch controller (T5) — decides whether T4 is needed at all.
-2. Run the `xnu` workflow with `MACHINE_CONFIG=SWEET` to confirm the patch series
-   applies to a clean xnu-8796. First thing that can fail and is checkable
-   without hardware.
+2. ~~Run the `xnu` workflow~~ — running as **run 40173726660** (see above). Wait
+   for it; a failure in `Fetch build script`/`Build` means the patch series no
+   longer applies cleanly to xnu-8796 and the hunk headers/context must be
+   re-checked. That is the first thing that can fail and is checkable without
+   hardware.
 3. Build the shim: `DTB=<stock dtb.img> shim/build.sh`.
 4. `fastboot boot`; the new `RAMTOP` line gives the live RAM size and settles
    `--mem`.

@@ -12,7 +12,7 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M2 | Port scaffold: tree copied, device layer edited | **done** | this repo |
 | M3 | Patch chain still applies after the edits | **done** | `python research/verify_patches.py` → `665 lines, chain OK` |
 | M4 | ADT builder produces a valid courbet ADT | **done** | `mkadt.py --highmem --mem 6\|8` → 10 112 B, `dram-size 0xfcb00000` / `0x17cb00000`, root `compatible` = `D22AP, iPhone10,3, xiaomi,courbet, xiaomi,sweet, qcom,sm7150, AppleARM` |
-| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **blocked** | needs macOS → GitHub Actions workflow `xnu`. Not run for courbet. |
+| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **in progress** | run `40173726660` on https://github.com/qualixxe/ios-courbet/actions/runs/40173726660 (macos-14, triggered by the initial push). The first steps are the ones that matter: the patches are copied into blacktop's build script and applied to a clean `xnu-8796`. |
 | M6 | Build the shim (`shim/build.sh`) | **todo** | needs `aarch64-linux-gnu-gcc` + `mkbootimg` (WSL or CI). Not compiled since the `fdt_memory_top` addition. |
 | M7 | `fastboot boot` the shim, confirm console output | **blocked** | no device |
 | M8 | XNU boots to panic log / early console | **blocked** | needs M7 |

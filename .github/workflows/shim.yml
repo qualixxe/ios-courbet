@@ -28,12 +28,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-aarch64-linux-gnu gcc cpio gzip device-tree-compiler
-          # PEP 668: do not touch the system python
-          python3 -m venv "$RUNNER_TEMP/mk"
-          "$RUNNER_TEMP/mk/bin/pip" install --quiet mkbootimg
-          echo "$RUNNER_TEMP/mk/bin" >> "$GITHUB_PATH"
+          # mkbootimg is not in PyPI and not in apt: use the vendored AOSP script
+          chmod +x tools/aosp/mkbootimg
+          echo "$GITHUB_WORKSPACE/tools/aosp" >> "$GITHUB_PATH"
           aarch64-linux-gnu-gcc --version | head -1
           dtc --version
+          python3 tools/aosp/mkbootimg.py --help | head -2
 
       - name: Compile, link, pack
         run: |

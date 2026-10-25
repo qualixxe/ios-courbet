@@ -1,0 +1,4 @@
+#!/bin/sh
+# Wrapper so `mkbootimg` resolves on PATH in CI without android-tools.
+# The real script is the unmodified AOSP one next to this file (see README.md).
+exec python3 "$(dirname "$0")/mkbootimg.py" "$@"

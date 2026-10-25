@@ -1,0 +1,8 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -399,3 +399,5 @@
+ 		s->release();
+ 	}
++	/* command-mode panel needs a kick after the CPU flush to panel memory */
++	*(volatile uint32_t *)0xae2204 = 1;
+ }

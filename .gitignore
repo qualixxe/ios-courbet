@@ -2,10 +2,14 @@
 backup/
 dtb/
 recovery/
-# third-party/Apple sources fetched for reading
-research/
+# third-party/Apple sources fetched for reading, device dumps, DT decompiles
+# (the decompiled dts and shirayuki-oem carry no serials of ours but are derived
+# material; the port's own tooling below stays in git so the edits are reproducible)
+research/*
+!research/*.py
 src/
 shim/out/
 xnu/out/
 xnu/out-*/
+build.log
 __pycache__/

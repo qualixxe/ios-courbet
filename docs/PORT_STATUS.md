@@ -12,7 +12,8 @@ Legend: **done** = applied and locally verified · **todo** = written but never 
 | M2 | Port scaffold: tree copied, device layer edited | **done** | this repo |
 | M3 | Patch chain still applies after the edits | **done** | `python research/verify_patches.py` → `665 lines, chain OK` |
 | M4 | ADT builder produces a valid courbet ADT | **done** | `mkadt.py --highmem --mem 6\|8` → 10 112 B, `dram-size 0xfcb00000` / `0x17cb00000`, root `compatible` = `D22AP, iPhone10,3, xiaomi,courbet, xiaomi,sweet, qcom,sm7150, AppleARM` |
-| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **in progress** | run `40173726660` on https://github.com/qualixxe/ios-courbet/actions/runs/40173726660 (macos-14, triggered by the initial push). The first steps are the ones that matter: the patches are copied into blacktop's build script and applied to a clean `xnu-8796`. |
+| M5 | Build XNU with `MACHINE_CONFIG=SWEET` | **done, but with a miss** | run `40173726660` → `success` (7 min 15 s, macos-14), banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel` 60 MB. **However `0063` was silently skipped**: `error: corrupt patch at line 27` — I grew a hunk without updating `@@ -32,6 +32,11 @@`, and blacktop's apply loop only *warns* and continues. The kernel therefore built without the GENI packing fix. Header corrected in the tree; a second run re-verifies. |
+| M5b | CI must fail when one of our patches is skipped | **done** | new step `Verify ios-courbet patches applied` right after `Build`: counts `Applying patch` / `Skipping patch` lines for `xnu/patches/*.patch` and fails if they disagree. Turns the 0063 class of bug from a silent green into a red build. |
 | M6 | Build the shim (`shim/build.sh`) | **todo** | needs `aarch64-linux-gnu-gcc` + `mkbootimg` (WSL or CI). Not compiled since the `fdt_memory_top` addition. |
 | M7 | `fastboot boot` the shim, confirm console output | **blocked** | no device |
 | M8 | XNU boots to panic log / early console | **blocked** | needs M7 |
@@ -70,10 +71,22 @@ because the first version was not and left duplicate blocks in `shim/fdt.h`,
 `shim/loader.c` and `shim/build.sh`. That was found and fixed — worth knowing that
 `research/` scripts mutate the tree directly and are meant to be re-run.
 
-Every hunk header in `0060`, `0062`, `0063` was re-counted and matches its body.
-The verification is *per-file*: it reconstructs `bsd/dev/sweet_touch.c` from `0060`
-and replays `0062`/`0063` on it. It does **not** prove the rest of the series applies
-to a pristine `xnu-8796` — that only a real `git apply` in CI will.
+`research/fix_hunks.py` now walks **all 81** `xnu/patches/*.patch` and re-counts
+every hunk header (two passes: it exits 1 while it is still correcting something).
+It caught `0063`'s stale `@@ -32,6 +32,11 @@` — the bug CI reported as
+`corrupt patch at line 27`. Its own first version had a second bug (it appended
+the corrected header but dropped the hunk body) and destroyed `0063`; that file
+was restored from `ios-sweet-upstream/` and re-edited, after which:
+
+```
+fix_hunks.py  pass1  81 patch file(s) checked, 0 hunk header(s) corrected   exit 0
+fix_hunks.py  pass2  81 patch file(s) checked, 0 hunk header(s) corrected   exit 0
+verify_patches.py    bsd/dev/sweet_touch.c: 668 lines, chain OK             exit 0
+```
+
+`verify_patches.py` proves the `0060 → 0062 → 0063` chain on `sweet_touch.c` only;
+it cannot prove the series applies to a pristine `xnu-8796` — CI does that, and now
+`M5b` makes a skipped patch fail the run.
 
 ## Next concrete action
 

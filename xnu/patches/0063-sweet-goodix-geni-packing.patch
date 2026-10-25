@@ -9,7 +9,7 @@
   */
  #if defined(ARM64_BOARD_CONFIG_SWEET)
  #include <sys/param.h>
-@@ -32,6 +32,11 @@
+@@ -32,6 +32,14 @@
  #define TOUCH_MAX        10u
  #define TOUCH_GOODIX     1
  #define TOUCH_FTS        2

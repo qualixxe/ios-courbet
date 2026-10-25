@@ -69,10 +69,28 @@ jobs:
 
       - name: Build
         working-directory: dxb
+        shell: bash
         env:
           # keep going after errors so one run reports every compile failure
           MAKEFLAGS: ${{ inputs.keep_going == 'false' && '' || '-k' }}
-        run: bash build.sh
+        run: |
+          bash build.sh 2>&1 | tee ../build.log
+
+      - name: Verify ios-courbet patches applied
+        # blacktop's apply loop only *warns* on a corrupt / non-applying patch and
+        # skips it, so the build can go green without our code in the kernel. That
+        # happened once (0063 had a stale @@ header); this makes it fatal.
+        run: |
+          expected=$(ls xnu/patches/*.patch | wc -l | tr -d ' ')
+          applied=$(grep -cE 'Applying patch: .*/[0-9]{4}-' build.log || true)
+          skipped=$(grep -cE 'Skipping patch .*/[0-9]{4}-' build.log || true)
+          echo "expected=$expected applied=$applied skipped=$skipped"
+          grep -nE 'Skipping patch .*/[0-9]{4}-' build.log || true
+          if [ "$skipped" != "0" ] || [ "$applied" -lt "$expected" ]; then
+            echo "::error::not all ios-courbet patches were applied (see above)"
+            exit 1
+          fi
+          echo "all $expected ios-courbet patches applied"
 
       - name: Package build tree for local compiles
         if: always()

@@ -16,10 +16,21 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
   push credential `qualixxe` via Git Credential Manager; `gh` is not installed —
   GitHub REST calls go through `git credential fill` + `Invoke-RestMethod`).
   Initial commit `afb307b`, 144 files, `research/` + `src/` excluded.
-- **CI run `40173726660`** (`xnu`, push-triggered, macos-14, 120 min timeout):
-  https://github.com/qualixxe/ios-courbet/actions/runs/40173726660 — this is
-  milestone M5, it answers whether the edited patch series still applies to a
-  clean xnu-8796. Result: **see below when it lands**.
+- **CI run `40173726660`** (`xnu`, push-triggered, macos-14, 7 min 15 s) →
+  `success`: https://github.com/qualixxe/ios-courbet/actions/runs/40173726660
+  banner `xnu-8796.141.3`, `CURRENT_MACHINE_CONFIG=SWEET`, artifact `xnu-kernel`
+  (60 MB) + `xnu-buildtree`. **Not a clean pass, though:** `0063` was skipped —
+  `error: corrupt patch at line 27`, because I added 4 lines to a hunk and left
+  `@@ -32,6 +32,11 @@` instead of `+32,14`. blacktop's apply loop only *warns*
+  and skips, so the kernel built without the GENI touch packing fix.
+  Fixed (header now `@@ -32,6 +32,14 @@`); `research/fix_hunks.py` was
+  generalised from "0062 only" to all 81 patches and now passes twice with 0
+  corrections. While doing that its first (buggy) version dropped hunk bodies and
+  destroyed `0063` — restored from `ios-sweet-upstream/` and re-edited
+  (`research/restore_0063.py`), then `verify_patches.py` → 668 lines, chain OK.
+  **New CI step `Verify ios-courbet patches applied`** (milestone M5b) counts
+  `Applying patch`/`Skipping patch` for `xnu/patches/*.patch` and fails the run if
+  they disagree, so this can no longer go green unnoticed.
 
 **What was changed (and verified locally)**
 
@@ -84,11 +95,9 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 **Next action (in order)**
 
 1. Identify the touch controller (T5) — decides whether T4 is needed at all.
-2. ~~Run the `xnu` workflow~~ — running as **run 40173726660** (see above). Wait
-   for it; a failure in `Fetch build script`/`Build` means the patch series no
-   longer applies cleanly to xnu-8796 and the hunk headers/context must be
-   re-checked. That is the first thing that can fail and is checkable without
-   hardware.
+2. Re-run the `xnu` workflow (any push touching `xnu/patches/**` or the workflow
+   file triggers it) and confirm the new `Verify ios-courbet patches applied` step
+   reports `all 81 ios-courbet patches applied`. That closes M5.
 3. Build the shim: `DTB=<stock dtb.img> shim/build.sh`.
 4. `fastboot boot`; the new `RAMTOP` line gives the live RAM size and settles
    `--mem`.

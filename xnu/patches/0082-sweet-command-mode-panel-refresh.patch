@@ -1,6 +1,6 @@
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -1215,3 +1215,28 @@
+@@ -185,3 +185,28 @@
 +/*
 + * Command-mode panel refresh kick for courbet (SM7150 SDE).
 + * After the CPU copies a new frame to the panel memory (fPixels), the
@@ -29,12 +29,11 @@
  void
  AppleCLCD::swap(const uint8_t *rec)
  {
-@@ -1289,6 +1322,8 @@
- 		s->release();
+@@ -192,5 +224,7 @@
+ 	IOLockUnlock(fb->fLock);
+ 	if (rec != NULL) {
+ 		fb->present(rec);
++		/* command-mode panel needs a kick after the CPU flush to panel memory */
++		sweet_panel_refresh();
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
  	}
-+	/* command-mode panel needs a kick after the CPU flush to panel memory */
-+	sweet_panel_refresh();
- }
- 
- bool
- IOMobileFramebufferUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)

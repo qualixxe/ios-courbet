@@ -1,0 +1,20 @@
+/*
+ * Synthetic device tree for CI only.
+ *
+ * The real courbet DTB is a device dump and stays out of git, so a compile-only
+ * run has nothing to embed. This stub is enough for mkbootimg to produce a
+ * header-v2 boot.img, which lets CI exercise the whole packing path and verify
+ * that what comes out of the image is byte-identical to what went in.
+ */
+/dts-v1/;
+
+/ {
+	compatible = "ios-courbet,shim-ci";
+	model = "shim CI stub";
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	chosen {
+		bootargs = "console=null";
+	};
+};

@@ -9,6 +9,7 @@ research/*
 !research/*.py
 src/
 shim/out/
+shim/test/*.dtb
 xnu/out/
 xnu/out-*/
 build.log

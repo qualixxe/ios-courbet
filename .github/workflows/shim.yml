@@ -1,0 +1,62 @@
+name: shim
+
+# The shim is bare-metal AArch64 (no libc): compile + link + pack it on Linux.
+# The real courbet DTB is a device dump and is not in the repo, so CI packs with
+# a synthetic stub DTB and then proves the boot.img round-trips byte-for-byte.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "shim/**"
+      - "tools/unpack_bootv2.py"
+      - ".github/workflows/shim.yml"
+
+concurrency:
+  group: shim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu gcc cpio gzip device-tree-compiler
+          # PEP 668: do not touch the system python
+          python3 -m venv "$RUNNER_TEMP/mk"
+          "$RUNNER_TEMP/mk/bin/pip" install --quiet mkbootimg
+          echo "$RUNNER_TEMP/mk/bin" >> "$GITHUB_PATH"
+          aarch64-linux-gnu-gcc --version | head -1
+          dtc --version
+
+      - name: Compile, link, pack
+        run: |
+          set -x
+          dtc -I dts -O dtb -o "$RUNNER_TEMP/minimal.dtb" shim/test/minimal.dts
+          DTB="$RUNNER_TEMP/minimal.dtb" bash shim/build.sh
+          ls -l shim/out/Image shim/out/shim-boot.img
+
+      - name: Verify the packed image round-trips
+        run: |
+          python3 tools/unpack_bootv2.py shim/out/shim-boot.img "$RUNNER_TEMP/unpacked"
+          cmp shim/out/Image            "$RUNNER_TEMP/unpacked/kernel"
+          cmp shim/out/ramdisk.bin      "$RUNNER_TEMP/unpacked/ramdisk"
+          cmp "$RUNNER_TEMP/minimal.dtb" "$RUNNER_TEMP/unpacked/dtb"
+          grep -E 'header_version|kernel_size|ramdisk_size|dtb_offset' "$RUNNER_TEMP/unpacked/header.txt"
+          echo "boot.img round-trip OK"
+
+      - name: Upload shim artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shim
+          if-no-files-found: error
+          path: |
+            shim/out/Image
+            shim/out/shim-boot.img
+            shim/out/host.ppm

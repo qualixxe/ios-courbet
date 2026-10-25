@@ -141,11 +141,35 @@ edit('shim/build.sh', [
     ('# Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.',
      '# Build the shim and wrap it in a boot.img v2 that mirrors the stock PixelOS header.\n'
      '# DTB=/path/to/dtb overrides the stock courbet DTB (default below).'),
-    ('mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \\',
+    # mawk (Debian/Ubuntu default) has no strtonum(); bash understands 16#hex.
+    ('size=$(aarch64-linux-gnu-nm out/shim.elf | awk \'$3=="_end"{print strtonum("0x"$1)}\')\n'
+     'truncate -s "$size" out/Image',
+     'size_hex=$(aarch64-linux-gnu-nm out/shim.elf | awk \'$3=="_end"{print $1}\')\n'
+     'size=$((16#$size_hex))\n'
+     'truncate -s "$size" out/Image'),
+    # The stock DTB is a device dump and is not in git: a compile-only run (CI)
+    # has nothing to pack, and that must not be an error.
+    ('mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \\\n'
+     '\t--dtb ../dtb/boot_unpacked/dtb --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \\\n'
+     '\t--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \\\n'
+     '\t--os_version 17.0.0 --os_patch_level 2035-06 \\\n'
+     '\t--cmdline "console=null" -o out/shim-boot.img\n'
+     '# Host render of the console layout.\n'
+     'gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test\n'
+     'ls -l out/Image out/shim-boot.img\n',
      'DTB=${DTB:-../dtb/boot_unpacked/dtb}\n'
-     'mkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \\'),
-    ('\t--dtb ../dtb/boot_unpacked/dtb --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \\',
-     '\t--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \\'),
+     'if [ -f "$DTB" ] && command -v mkbootimg >/dev/null 2>&1; then\n'
+     '\tmkbootimg --header_version 2 --kernel out/Image --ramdisk out/ramdisk.bin \\\n'
+     '\t\t--dtb "$DTB" --base 0 --kernel_offset 0x8000 --ramdisk_offset 0x1000000 \\\n'
+     '\t\t--tags_offset 0x100 --dtb_offset 0x1f00000 --pagesize 4096 \\\n'
+     '\t\t--os_version 17.0.0 --os_patch_level 2035-06 \\\n'
+     '\t\t--cmdline "console=null" -o out/shim-boot.img\n'
+     'else\n'
+     '\techo "note: no boot.img (DTB=$DTB missing or mkbootimg not installed)" >&2\n'
+     'fi\n'
+     '# Host render of the console layout.\n'
+     'gcc -O1 -Wall -o out/host_test console.c host_test.c && ./out/host_test\n'
+     'ls -l out/Image out/shim-boot.img 2>/dev/null || ls -l out/Image\n'),
 ])
 
 # ---------------------------------------------------------------- tools/mkpayload.py

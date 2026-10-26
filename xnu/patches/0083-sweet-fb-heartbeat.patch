@@ -1,0 +1,14 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -212,6 +212,11 @@
+ 	AppleCLCD *fb = (AppleCLCD *)owner;
+ 	uint64_t now = mach_absolute_time();
+ 	uint64_t count = ++fb->fVsyncCount;
++	/* heartbeat: proves the vsync timer is alive even if the console
++	 * stops producing output after a hang or a panic. 60 vsyncs ~= 1 s. */
++	if ((count % 60) == 0) {
++		IOLog("SWEET FB: tick %llu\n", count);
++	}
+ 	uint64_t values[6] = {
+ 		(uint32_t)count, (uint32_t)(count >> 32),
+ 		(uint32_t)now, (uint32_t)(now >> 32),

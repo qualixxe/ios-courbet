@@ -1,0 +1,98 @@
+name: rootfs
+
+# Build the iOS HFS+ root image for the userdata partition of courbet:
+#   tools/mkiosroot.sh OS.dmg SystemOS.dmg AppOS.dmg OUT.img [16G]
+# Source: iPhone X (iPhone10,3/10,6) iOS 16.7.16 build 20H392 restore IPSW,
+# the same upstream build ios-sweet ran to a working SpringBoard.
+# Outputs artifact "ios-rootfs-20h392" (rootfs.img.gz + sha256 + log).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/mkiosroot.sh'
+      - 'tools/patch-launchd-plist.py'
+      - 'tools/sweet-root-tweaks.py'
+      - '.github/workflows/rootfs.yml'
+
+concurrency:
+  group: rootfs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-rootfs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      IPSW_URL: https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw
+
+    steps:
+      - name: Check out the port
+        uses: actions/checkout@v4
+
+      - name: Install host tools (hfsprogs, rsync, apfs-fuse)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends hfsprogs rsync unzip zip
+          if ! command -v apfs-fuse >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends libfuse3-dev libb2-dev cmake
+            git clone --depth=1 https://github.com/sgan81/apfs-fuse.git apfs-fuse-src
+            git -C apfs-fuse-src submodule update --init --recursive
+            cmake -S apfs-fuse-src -B apfs-fuse-build -DCMAKE_BUILD_TYPE=Release
+            cmake --build apfs-fuse-build -j4
+            sudo install -m 755 apfs-fuse-build/apfs-fuse /usr/local/bin/apfs-fuse
+          fi
+          apfs-fuse -h 2>&1 | head -3 || true
+
+      - name: Fetch IPSW and extract OS/SystemOS/AppOS dmgs
+        run: |
+          set -euxo pipefail
+          mkdir -p dmgs
+          curl -L --retry 5 --retry-delay 5 -o ipsw.zip "$IPSW_URL"
+          unzip -o ipsw.zip BuildManifest.plist
+          PATHS=$(python3 - <<'PY'
+          import plistlib, json
+          m = plistlib.load(open('BuildManifest.plist', 'rb'))
+          for ident in m['BuildIdentities']:
+              man = ident['Manifest']
+              keys = ('OS', 'SystemOS', 'AppOS')
+              if all(k in man for k in keys):
+                  print(json.dumps({k: man[k]['Info']['Path'] for k in keys}))
+                  break
+          PY
+          )
+          echo "$PATHS" | tee manifest-paths.json
+          OS_PATH=$(echo "$PATHS" | jq -r '.OS')
+          SYSOS_PATH=$(echo "$PATHS" | jq -r '.SystemOS')
+          APPOS_PATH=$(echo "$PATHS" | jq -r '.AppOS')
+          unzip -o ipsw.zip "$OS_PATH" "$SYSOS_PATH" "$APPOS_PATH"
+          mv "$OS_PATH" dmgs/os.dmg
+          mv "$SYSOS_PATH" dmgs/sysos.dmg
+          mv "$APPOS_PATH" dmgs/appos.dmg
+          rm -f ipsw.zip
+          du -h dmgs/*
+          df -h .
+
+      - name: Build 16G HFS+ root image
+        run: |
+          set -euxo pipefail
+          sudo modprobe loop 2>/dev/null || true
+          sudo modprobe hfsplus 2>/dev/null || true
+          sudo bash tools/mkiosroot.sh dmgs/os.dmg dmgs/sysos.dmg dmgs/appos.dmg rootfs.img 16G 2>&1 | tee build.log
+          ls -lh rootfs.img
+          sha256sum rootfs.img | tee rootfs.img.sha256
+          gzip -6 -k rootfs.img
+          sha256sum rootfs.img.gz | tee -a rootfs.img.sha256
+          ls -lh rootfs.img.gz build.log
+
+      - name: Upload ios-rootfs-20h392
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-rootfs-20h392
+          path: |
+            rootfs.img.gz
+            rootfs.img.sha256
+            build.log
+          compression-level: 0
+          if-no-files-found: error

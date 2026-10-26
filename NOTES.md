@@ -5,6 +5,69 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-10-26) — device reality check: console works, kernel alive, bsd_init stall traced next
+
+**Device runs XNU.** Verified with `fastboot boot` on the phone (user photos,
+2026-10-25/26):
+
+- Shim console renders on the panel; `RAMTOP 0x1FCC00000` → 6 GB is correct.
+- XNU streams a large `bsd_init` console past anything seen before: `SWEET SURF`,
+  `SWEET HID`, `SWEET CHRG`, `SWEET BATTERY`, `SWEET FB: AppleCLCD 1080x2400
+  stride 4320`, SMP `cpu0 entered invtCPU`, SMC, MPC framework, ktriage, AMFI,
+  Sandbox, cache info, DLIL interface threads (gif0/stf0/lo0 scheduled),
+  kernel self-tests. No `panic` line observed in photos.
+- Output stops partway through late `bsd_init`. The earlier "freeze" is **not**
+  a display defect: with the `0083` heartbeat build the user reports
+  `SWEET FB: tick N` lines keep counting every second after other output
+  stalls — kernel alive, SMP-timer + IOLog + console + D1 panel kick all work.
+  The kernel just stops making progress in late `bsd_init`.
+
+**Numbers for reproduction**
+
+- Run `40185740338` (`9ca3baf`) → success, 82/82 patches: first D1-kick kernel
+  (`10b974e9…`) whose boot filled the screen to mid-`bsd_init`.
+- Run `40355906491` (`8ace5dc`) → success, 83/83: adds `0083-sweet-fb-heartbeat.patch`
+  (in `vsyncFired`, after `fVsyncCount++`: every 60 counts → `IOLog("SWEET FB: tick
+  %llu\n", count)`). Kernel sha `d4bc7f26…`; repacked image
+  `shim/out/shim-boot-courbet-xnu6g.img` 17 199 104 B, sha256
+  `9692028064f7b660bf87083d0c93f2ee290c7e8d6eef970c60ee268fcefd144c` — the build the
+  user booted (ticks confirmed growing).
+- Run `40359010372` (`ece5df9`) → Build success but **`Verify ios-courbet patches
+  applied` failed (`expected=84 applied=83 skipped=1`)**: `0084` skipped with
+  `corrupt patch at line 7` — my first version of the patch contained only context,
+  no `-`/`+` lines. Fixed in `6bbcf85`: patch rewritten as a canonical git-style
+  hunk (`@@ -490,7 +490,7 @@`, anchor lines around
+  `platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT)`, flips
+  `#define DEBUG_BSDINIT 0` → `1` in `bsd/kern/bsd_init.c`, which enables the ~50
+  `bsd_init: calling …` trace prints). Lesson recorded: validate repo patches with
+  `git apply --check` against the CI buildtree, not only `fix_hunks.py` —
+  `verify_patches.py` only replays the sweet_touch chain and stays silent on other files.
+- CI run for `6bbcf85` in flight (concurrency cancels stale runs).
+
+**Display/DT facts (from `research/shirayuki-oem/dtbo.img`)**
+
+- Stock `dtbo.img` has **1 overlay** (id `0xd7b7ab1e`) whose FDT adds both courbet
+  panel nodes `qcom,mdss_dsi_k9a_36_02_0a_mp_dsc_cmd` and `…_0b	mp_dsc_cmd`
+  with `qcom,esd-err-irq-gpio`, `qcom,platform-te-gpio`, `qcom,platform-reset-gpio`.
+- Our boot applies only the stock `dtb.img` (single FDT, verified) — fine for the
+  console path; panel-overlay merge is future work if we switch panels/regulators.
+- `dtb.img` itself lists just `qcom,msm-id` / `qcom,board-id` / `qcom,msm-name`
+  strings at top level.
+
+**Next**
+
+1. Boot the `0084` trace build once CI lands; read the last `bsd_init: calling … `
+   line from the screen → exact stall step.
+2. Fix the stall (likely inside one of the calls after `dlil_init`:
+   `socketinit/domaininit/skywalk_init/memorystatus/sysctl` or earlier, e.g.
+   `vfsinit/IOKitInitializeTime/bsd_bufferinit/IF PP`).
+3. Then rootfs: ramdisk with `launchd` mounted via our UFS/HFS path or an HFS image
+   in a partition; kernel args currently have no `rootdev`, and there is no
+   userspace payload yet — that is milestone M11 work.
+4. `Still waiting for root device` was **not** observed on the stalled screen, so
+   the stall happens **before** `IOFindBSDRoot` even starts — rootfs is not yet
+   the blocker even though it is the next real milestone.
+
 ## Handoff (2026-10-25) - XNU and shim both build in CI; two fastboot images ready
 
 **Where the tree is**

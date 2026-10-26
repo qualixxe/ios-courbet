@@ -56,9 +56,18 @@ jobs:
           m = plistlib.load(open('BuildManifest.plist', 'rb'))
           for ident in m['BuildIdentities']:
               man = ident['Manifest']
-              keys = ('OS', 'SystemOS', 'AppOS')
-              if all(k in man for k in keys):
-                  print(json.dumps({k: man[k]['Info']['Path'] for k in keys}))
+              def path(*keys_):
+                  for key in keys_:
+                      if key in man:
+                          return man[key]['Info']['Path']
+                  return None
+              paths = {
+                  'OS': path('OS'),
+                  'SystemOS': path('Cryptex1,SystemOS', 'SystemOS'),
+                  'AppOS': path('Cryptex1,AppOS', 'AppOS'),
+              }
+              if all(paths.values()):
+                  print(json.dumps(paths))
                   break
           PY
           )

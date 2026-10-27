@@ -5,6 +5,62 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-10-27) — rootfs image built in CI; next step: flash userdata (needs explicit user OK)
+
+**What happened during the night**
+
+- User declined the local WSL route after DISM `Error: 14098` (component store
+  corrupted) — "лучше гитхаб". Everything rootfs-related moved to CI.
+- `rootfs` workflow (`.github/workflows/rootfs.yml`, ubuntu-24.04) is green after
+  three fixes, run **`40368757600`** (ref `528a5d6`):
+  1. `bzlib.h` missing → added `libbz2-dev zlib1g-dev` for the apfs-fuse build.
+  2. 20H392 BuildManifest keys are **`OS` / `Cryptex1,SystemOS` / `Cryptex1,AppOS`**
+     (not `SystemOS`/`AppOS`) — mapping validated against the local IPSW:
+     `087-86698-044.dmg` (OS, 4.41 GB), `087-86593-047.dmg` (SystemOS, 2.55 GB),
+     `087-86715-047.dmg` (AppOS, 10 MB).
+  3. Runner kernel is Azure without `hfsplus` (`unknown filesystem type 'hfsplus'`)
+     → new step installs `linux-modules-extra-$(uname -r)` + `depmod` + `modprobe`.
+- Artifact `ios-rootfs-20h392` (id `12672228816`, **5642 MB**): `rootfs.img.gz`
+  (16 GB HFS+ journaled, `mkfs.hfsplus -s -J -v iOSRoot`, iOS 16.7.16 20H392 root +
+  cryptexes + dyld cache hard links + keybag + logd stores, fsck-cleaned),
+  `rootfs.img.sha256`, `build.log`. Download in progress via `getartifact.ps1`
+  (RunId `40368757600`, dest `%TEMP%\rootfs-art`).
+
+**Where the kernel is**
+
+- Current boot image `shim/out/shim-boot-courbet-xnu6g.img`
+  (17 199 104 B, sha256 `d489e8fab69c402258d3158dbf3cd415370abcffcb6f92b29bb514cb3fcce3bf`
+  — kernel `0e40d03c…` from run `40363880989`, commit `bd71443`: DEBUG_BSDINIT trace +
+  heartbeat throttled to one line per ~10 s).
+- Payload args now carry the upstream userspace set:
+  `debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress
+  rd=ufsroot0 ufsrw=1 rootrw=1 unentitled_ios_sim_launch=1 ignition_level=1
+  wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1`.
+- Device result 2026-10-26 evening: mount attempts happen — the classic
+  `cannot mount root, errno = N` loop (`bsd/kern/bsd_init.c:899`) is on screen
+  and repeats. **N was never reported by the user.** Expected 22 (EINVAL: ext4
+  content rejected by HFS), but if 19 (ENODEV) the root device publishing path
+  needs a look before the image can even mount.
+- Apple's `launchd` will be the first userspace process once the HFS image is
+  on `userdata`; boot args for that are already in place.
+
+**Next (when the user is back)**
+
+1. Finish artifact download, verify sha256, gunzip to `rootfs.img` (16 GB).
+2. Ask the explicit destructive step OK (AGENTS: courbet needs fresh consent):
+   `fastboot flash userdata rootfs.img` (partition ~107 GB, image 16 GB fills
+   the head; HFS+ volume is self-contained). Android **data** on userdata is
+   lost; system/boot/modem/persist untouched. Bootloader relock not involved.
+3. `fastboot boot shim/out/shim-boot-courbet-xnu6g.img` → expect launchd logs
+   on console; the `0084` bsd_init trace is still enabled for smooth decoding.
+4. If boot images need to change later: `mkpayload.py … --cmdline …` is the
+   only knob (kernel is payload-independent; boot args live in the payload blob,
+   608 B field).
+5. Still open: the errno number from the phone; iOS 16.7.16 uses the same 20H392
+   rootfs upstream ran (all good), but sweet's v13/v14 plist tweaks
+   (`tools/patch-launchd-plist.py`, CommCenter removal, Setup skip) may be needed
+   as later image revisions, exactly as on sweet.
+
 ## Handoff (2026-10-26) — device reality check: console works, kernel alive, bsd_init stall traced next
 
 **Device runs XNU.** Verified with `fastboot boot` on the phone (user photos,

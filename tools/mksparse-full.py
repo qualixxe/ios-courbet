@@ -39,7 +39,7 @@ def main():
             data = s.read(n * BS)
             if len(data) != n * BS:
                 raise SystemExit('short read at offset %d' % (sent * BS))
-            d.write(struct.pack('<III', RAW, 0, 12 + n * BS))
+            d.write(struct.pack('<HHII', RAW, 0, n, 12 + n * BS))
             d.write(data)
             left -= n
             sent += n

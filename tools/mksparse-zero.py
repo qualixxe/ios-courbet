@@ -46,7 +46,7 @@ def main():
 
         def emit_raw(nblocks_now):
             nonlocal chunks, blob, emitted
-            d.write(struct.pack('<III', RAW, 0, 12 + nblocks_now * BS))
+            d.write(struct.pack('<HHII', RAW, 0, nblocks_now, 12 + nblocks_now * BS))
             d.write(bytes(blob[:nblocks_now * BS]))
             del blob[:nblocks_now * BS]
             emitted += nblocks_now
@@ -69,7 +69,7 @@ def main():
                     zrun += 1
                 else:
                     if zrun:
-                        d.write(struct.pack('<III', DONT_CARE, 0, 12))
+                        d.write(struct.pack('<HHII', DONT_CARE, 0, zrun, 12))
                         emitted += zrun
                         chunks += 1
                         zrun = 0
@@ -88,7 +88,7 @@ def main():
                 n = len(blob) // BS
                 emit_raw(n)
         if zrun:
-            d.write(struct.pack('<III', DONT_CARE, 0, 12))
+            d.write(struct.pack('<HHII', DONT_CARE, 0, zrun, 12))
             emitted += zrun
             chunks += 1
 

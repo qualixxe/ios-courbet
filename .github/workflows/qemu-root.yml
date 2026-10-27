@@ -1,0 +1,71 @@
+name: qemu-root
+
+# Build the small journaled HFS+ test root for QEMU boots, following the
+# ios-sweet recipe (NOTES.md: "64 MB journaled test root, rd=md0 rootrw=1"):
+#   dd 64M -> mkfs.hfsplus -s -J -v sweetroot -> mount -o loop,force ->
+#   /sbin/launchd = tools/sweet-init.S wrapped by tools/mkinit.py ->
+#   umount. Linux hfsplus never touches the journal, so the image boots
+#   NeedInit just like the full 16 GB rootfs: QEMU runs
+#   hfs_early_journal_init -> journal_create at boot.
+# fsck verification mirrors tools/mkiosroot.sh (proven green in rootfs CI).
+# Outputs artifact "qemu-root" (qemu-root.img + sha256).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/sweet-init.S'
+      - 'tools/mkinit.py'
+      - '.github/workflows/qemu-root.yml'
+
+concurrency:
+  group: qemu-root-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-root:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the port
+        uses: actions/checkout@v4
+
+      - name: Install host tools (hfsprogs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hfsprogs
+
+      - name: Build sweet-init (the QEMU /sbin/launchd)
+        run: |
+          set -eux
+          clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o "$RUNNER_TEMP/sweet-init.o"
+          python3 tools/mkinit.py "$RUNNER_TEMP/sweet-init.o" "$RUNNER_TEMP/sweet-init"
+          file "$RUNNER_TEMP/sweet-init"
+
+      - name: Build the 64 MB journaled test root
+        run: |
+          set -eux
+          dd if=/dev/zero of=qemu-root.img bs=1M count=64 status=none
+          mkfs.hfsplus -s -J -v sweetroot qemu-root.img
+          work="$RUNNER_TEMP/qemuroot"
+          mkdir -p "$work"
+          sudo mount -t hfsplus -o loop,force qemu-root.img "$work"
+          sudo mkdir -p "$work/sbin" "$work/dev" "$work/private/var"
+          sudo cp "$RUNNER_TEMP/sweet-init" "$work/sbin/launchd"
+          sudo chmod 755 "$work/sbin/launchd"
+          sudo umount "$work"
+          # Same verification the full rootfs build uses.
+          fsck.hfsplus -f -y qemu-root.img | grep -v 'Illegal name' || true
+          fsck.hfsplus -f -n qemu-root.img
+
+      - name: Hash the test root
+        run: sha256sum qemu-root.img | tee qemu-root.img.sha256
+
+      - name: Upload the test root
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-root
+          path: |
+            qemu-root.img
+            qemu-root.img.sha256

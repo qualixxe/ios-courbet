@@ -5,6 +5,98 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-10-28) — QEMU harness green to PID 1 on the flashed kernel; phone data abort still needs a photo
+
+**What happened since 10-27**
+
+- User gave the explicit OK; `fastboot flash userdata rootfs-zero.simg`
+  SUCCEEDED; post-flash `fastboot boot` → phone panics (data abort,
+  `panic(cpu 0 caller 0xfffffe0007ad6418)` = `_sleh_synchronous_sp1`, plus
+  `handshake structure not initialized` — the KDP line every panic prints,
+  consequence not cause). **`pc=`/FAR never captured: no photo exists**, and
+  console ring / sweetlog / disk contain no panic text. The device later
+  returned to Android (userdata reformatted → rootfs must be re-flashed).
+- Ruled out (observation, direct file inspection): journal replay (JIB parse
+  consistent: flags 5 = InFS|NeedInit, offset 532480, size 8 MiB, end = extents
+  fork block 2178), allocation-bitmap DONT_CARE semantics (1 = allocated, zero
+  reads as free — safe), btree free nodes (never parsed at mount). The image
+  layout is very unlikely to be the panic source.
+- `NOTES-sweet.md` is byte-identical to upstream `NOTES.md` (MD5
+  `08A4C035816D1D441E50ED8D4699CB7E`) — no newer upstream hints to mine.
+- User decision: follow the ios-sweet path (QEMU before phone), everything
+  courbet-side. Done — see below.
+
+**QEMU harness (local, Windows, no WSL)**
+
+- QEMU 11.1.0 portable: the NSIS installer `qemu-w64-setup-20260811.exe` was
+  extracted with 7-Zip into `%TEMP%\opencode\qemu` (no admin needed, no winget).
+- `tools/qemu-sweet.py` patch (commit `425e291`): TCP QMP on Windows — this
+  Python 3.14 build has **no `socket.AF_UNIX`**, so `unix:` QMP sockets cannot
+  be used. Also learned: a traceback before `p.kill()` leaves an orphan QEMU
+  holding `serial.txt` open (second run then fails to open it).
+- `serial.txt` stays empty — expected. The real console channel is the
+  **framebuffer**: `research/qroot/fb.png` is readable directly as an image;
+  `qemu.log` (`-d int,guest_errors,unimp`) holds exception traces; `regs.txt`
+  comes from QMP stop.
+- CI workflow `qemu-root` (`.github/workflows/qemu-root.yml`): 64 MB journaled
+  HFS+ test root with upstream's exact flags (`mkfs.hfsplus -s -J` → signature
+  `HX`, same as the phone's `rootfs.img`), `/sbin/launchd` = sweet-init built
+  from `tools/sweet-init.S` + `tools/mkinit.py`. Iterations: v1 failed at
+  `unknown filesystem type 'hfsplus'` → v2 added stage markers and the
+  artifact-branch trick → `5c9e080` added the same `modprobe hfsplus` +
+  `linux-modules-extra` step `rootfs.yml` already needed (Azure runners have no
+  hfsplus built in). **Green run `40663084823`.**
+- Artifact delivery without tokens: the Actions artifacts API rejects the local
+  `GH_TOKEN` (expired 401), there is no `gh` and no connected browser — so the
+  workflow **pushes `qemu-root.img.gz` + `build-output.log` to the
+  single-commit branch `qemu-root-artifact`** (`permissions: contents: write`).
+  Local side: `git fetch origin qemu-root-artifact` (gzip ≈ 65 KB).
+
+**QEMU runs with the exact flashed kernel `0e40d03c` (`mkadt.py --qemu`,
+`mkpayload.py --ramdisk … --cmdline …`)**
+
+- Smoke (1 MB non-HFS ramdisk): boots deep, `BSD root: md0`,
+  `hfs_ValidateHFSPlusVolumeHeader: unknown Volume Signature : 0`,
+  `cannot mount root, errno = 19` — same class as the pre-flash phone ✓.
+- Run 1 PANICKED: `Interrupts held disabled for 27356992 ns (start =
+  900562250, now = 902272062, timeout = 13631488 ns) @machine_routines_common.c:897`,
+  backtrace `_thread_call_thread → ml_set_interrupts_enabled_with_debug →
+  _ml_handle_stackshot_interrupt_disabled_duration → _Assert`. **Not the
+  phone's data abort** (and `now − start` = 1.7 ms ≠ claimed 27.3 ms →
+  QEMU/TCG timing artifact). Found cause: the QEMU cmdline was missing the
+  phone's `wdt=-1`; `osfmk/arm/arm_init.c:493` sets
+  `interrupt_masked_debug_mode = SCHED_HYGIENE_MODE_OFF` exactly when `wdt=-1`.
+  **Fix: QEMU cmdline = the full phone cmdline minus `ufsroot0`/`ufsrw`, plus
+  `rd=md0`** (187 B, fits the 608 B field).
+- Run 2 **GREEN TO PID 1**: `hfs: Initializing the journal (joffset 0x3000 sz
+  0x80000)` → `hfs: mounted sweetroot on device b(1, 0)` → full bsd_init chain
+  (VFS_ROOT, devfs, signit, bsd_utaskbootstrap, mountroot_post_hook) →
+  `load_init_program: attempting to load /sbin/launchd` →
+  `*** SWEET userspace: init running as PID 1 ***` with heartbeats to tick
+  3600, no panic. This reproduces upstream NOTES line-135's milestone on the
+  courbet kernel.
+- **Coverage gap vs the phone** (guesses marked): QEMU exercises md0, not the
+  UFS controller; a 64 MB near-empty root, not the real 16 GB catalog btree;
+  sweet-init, not Apple's launchd + dyld + AMFI + lo0/IPv6 (`g_crypto_funcs`
+  panics happen on that path on sweet).
+
+**Next (in order)**
+
+1. Phone: `research\flash-rootfs.bat` (userdata was reformatted → re-flash
+   needed) → `research\boot-xnu.bat` → on panic **photo of the screen** (sole
+   source of `pc=`/FAR) → `python %TEMP%\opencode\symsweet.py 0x<addr>`.
+2. If photos keep failing: extend the QEMU test root with the real
+   `/sbin/launchd` + dyld/libSystem (CI already has apfs-fuse + the IPSW dmgs)
+   to cover the userspace stage, and run longer (`--secs`).
+3. If the photo shows a data abort with a small FAR: suspect the UFS path
+   first (guess — it is the largest phone-only difference from QEMU; constants
+   live in the port edits `0060/0062/0063`, `mkadt.py`, `sweet-ufs` node) and
+   re-verify them against `docs/COURBET_HARDWARE.md` + the DTB.
+
+**Commits 2026-10-28**: `cfbbfd1` (qemu-root v1) → `0dbd721` (v2 stage
+markers + artifact branch) → `5c9e080` (modprobe hfsplus; green run
+`40663084823`) → `425e291` (qemu-sweet TCP QMP on Windows).
+
 ## Handoff (2026-10-27) — rootfs image built in CI; next step: flash userdata (needs explicit user OK)
 
 **What happened during the night**

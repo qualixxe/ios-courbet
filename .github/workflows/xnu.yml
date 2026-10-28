@@ -25,6 +25,9 @@ concurrency:
   group: xnu-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 env:
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
@@ -140,3 +143,12 @@ jobs:
           name: xnu-kernel
           path: out/
           if-no-files-found: warn
+
+      - name: Push kernel to branch xnu-kernel-artifact
+        if: always()
+        run: |
+          git config user.name "xnu ci"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f out/ 2>/dev/null || true
+          git commit -m "xnu kernel ${{ github.run_id }}" || true
+          git push origin HEAD:refs/heads/xnu-kernel-artifact --force

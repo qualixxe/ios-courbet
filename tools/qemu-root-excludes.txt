@@ -1,0 +1,17 @@
+# rsync excludes for the OS-root copy of the QEMU lite root (mkiosroot.sh
+# with MKIOSROOT_OS_EXCLUDE set). Everything dyld resolves from the shared
+# cache (/System/Library/Caches/com.apple.dyld, copied in full from the
+# SystemOS cryptex) is dropped from disk to fit a ~6 GB QEMU payload.
+# Paths are relative to the OS root.
+System/Library/Frameworks/
+System/Library/PrivateFrameworks/
+System/Library/Extensions/
+System/Library/Assets/
+System/Library/AssetsV2/
+System/Library/Fonts/
+System/Library/LinguisticData/
+usr/share/
+usr/local/
+usr/standalone/
+# keep: /bin /sbin /usr/lib /usr/libexec /etc /System/Library/LaunchDaemons
+#       /System/Library/LaunchAgents /System/Library/Caches /private /var

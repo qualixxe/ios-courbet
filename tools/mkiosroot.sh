@@ -78,11 +78,15 @@ sudo mount -t hfsplus -o loop,force "$out" "$work/root"
 mounts=("$work/root" "${mounts[@]}")
 
 copy() {
-	echo "copying $1 -> ${2#"$work/root"}"
-	sudo mkdir -p "$2"
-	sudo rsync -aH --numeric-ids "$1/" "$2/"
+	local src=$1 dst=$2
+	shift 2
+	echo "copying $src -> ${dst#"$work/root"}"
+	sudo mkdir -p "$dst"
+	# Optional extra rsync flags (e.g. --exclude-from=FILE); used by the
+	# QEMU lite root to drop everything dyld serves from the shared cache.
+	sudo rsync -aH --numeric-ids "$@" "$src/" "$dst/"
 }
-copy "$work/os/root" "$work/root"
+copy "$work/os/root" "$work/root" ${MKIOSROOT_OS_EXCLUDE:+--exclude-from="$MKIOSROOT_OS_EXCLUDE"}
 copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
 copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
 

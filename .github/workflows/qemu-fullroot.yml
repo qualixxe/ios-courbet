@@ -1,0 +1,147 @@
+name: qemu-fullroot
+
+# Build the LITE iOS root for QEMU: the real iOS 16.7.16 20H392 userland
+# (real /sbin/launchd, dyld, full shared cache, LaunchDaemons) minus everything
+# dyld serves from the cache (Frameworks/Fonts/Assets) so the image fits a
+# ~6 GB QEMU payload. Same sources as rootfs.yml; mkiosroot.sh gets
+# MKIOSROOT_OS_EXCLUDE for the OS-root copy only.
+#
+# Delivery (the local GH_TOKEN is expired and artifacts need auth):
+#   - image: GitHub Release "qemu-fullroot" (public, download without auth),
+#     split into <2 GB parts because of the per-asset limit;
+#   - build log: always pushed to the single-commit branch
+#     "qemu-fullroot-log", fetchable with plain `git fetch`.
+#
+# Boot side (verified): mkadt.py --qemu --highmem --mem 8 (dram >4G so the
+# payload's ramdisk lands inside QEMU's -m 8G), mkpayload.py --ramdisk, then
+# tools/qemu-sweet.py PAYLOAD OUT --secs N --kernel kernel.development.sweet
+# --fail-on-panic  (exit 2 = panic decoded on the framebuffer).
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/mkiosroot.sh'
+      - 'tools/qemu-root-excludes.txt'
+      - '.github/workflows/qemu-fullroot.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qemu-fullroot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-fullroot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      IPSW_URL: https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw
+
+    steps:
+      - name: Check out the port
+        uses: actions/checkout@v4
+
+      - name: Install host tools (hfsprogs, rsync, apfs-fuse)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends hfsprogs rsync unzip zip
+          if ! command -v apfs-fuse >/dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends libfuse3-dev libb2-dev libbz2-dev zlib1g-dev cmake
+            git clone --depth=1 https://github.com/sgan81/apfs-fuse.git apfs-fuse-src
+            git -C apfs-fuse-src submodule update --init --recursive
+            cmake -S apfs-fuse-src -B apfs-fuse-build -DCMAKE_BUILD_TYPE=Release
+            cmake --build apfs-fuse-build -j4
+            sudo install -m 755 apfs-fuse-build/apfs-fuse /usr/local/bin/apfs-fuse
+          fi
+          apfs-fuse -h 2>&1 | head -3 || true
+
+      - name: Fetch IPSW and extract OS/SystemOS/AppOS dmgs
+        run: |
+          set -euxo pipefail
+          mkdir -p dmgs
+          curl -L --retry 5 --retry-delay 5 -o ipsw.zip "$IPSW_URL"
+          unzip -o ipsw.zip BuildManifest.plist
+          PATHS=$(python3 - <<'PY'
+          import plistlib, json
+          m = plistlib.load(open('BuildManifest.plist', 'rb'))
+          for ident in m['BuildIdentities']:
+              man = ident['Manifest']
+              def path(*keys_):
+                  for key in keys_:
+                      if key in man:
+                          return man[key]['Info']['Path']
+                  return None
+              paths = {
+                  'OS': path('OS'),
+                  'SystemOS': path('Cryptex1,SystemOS', 'SystemOS'),
+                  'AppOS': path('Cryptex1,AppOS', 'AppOS'),
+              }
+              if all(paths.values()):
+                  print(json.dumps(paths))
+                  break
+          PY
+          )
+          echo "$PATHS" | tee manifest-paths.json
+          OS_PATH=$(echo "$PATHS" | jq -r '.OS')
+          SYSOS_PATH=$(echo "$PATHS" | jq -r '.SystemOS')
+          APPOS_PATH=$(echo "$PATHS" | jq -r '.AppOS')
+          unzip -o ipsw.zip "$OS_PATH" "$SYSOS_PATH" "$APPOS_PATH"
+          mv "$OS_PATH" dmgs/os.dmg
+          mv "$SYSOS_PATH" dmgs/sysos.dmg
+          mv "$APPOS_PATH" dmgs/appos.dmg
+          rm -f ipsw.zip
+          du -h dmgs/*
+          df -h .
+
+      - name: Ensure hfsplus filesystem support
+        run: |
+          set -euxo pipefail
+          K=$(uname -r)
+          if ! sudo modprobe hfsplus 2>/dev/null; then
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$K"
+            sudo depmod -a "$K"
+            sudo modprobe hfsplus
+          fi
+          grep hfsplus /proc/filesystems
+
+      - name: Build the 6G lite HFS+ root
+        run: |
+          set -euxo pipefail
+          sudo modprobe loop 2>/dev/null || true
+          sudo modprobe hfsplus 2>/dev/null || true
+          sudo env MKIOSROOT_OS_EXCLUDE="$PWD/tools/qemu-root-excludes.txt" \
+            bash tools/mkiosroot.sh dmgs/os.dmg dmgs/sysos.dmg dmgs/appos.dmg qemu-fullroot.img 6G 2>&1 | tee build.log
+          ls -lh qemu-fullroot.img
+          df -h .
+
+      - name: Hash, compress, split
+        run: |
+          set -euxo pipefail
+          sha256sum qemu-fullroot.img | tee qemu-fullroot.sha256
+          gzip -1 -k qemu-fullroot.img
+          split -b 1800m qemu-fullroot.img.gz qfull-
+          ls -lh qfull-* qemu-fullroot.img.gz
+
+      - name: Publish the image as release qemu-fullroot
+        run: |
+          set -euxo pipefail
+          gh release delete qemu-fullroot --repo "$GITHUB_REPOSITORY" -y 2>/dev/null || true
+          git push origin :refs/tags/qemu-fullroot 2>/dev/null || true
+          gh release create qemu-fullroot --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "QEMU lite iOS root (20H392)" \
+            --notes "LITE root for QEMU runs of ios-courbet: real launchd/dyld/shared cache, frameworks excluded (run ${{ github.run_id }}). Concatenate: cat qfull-* > qemu-fullroot.img.gz && gunzip." \
+            qfull-* qemu-fullroot.sha256 build.log
+
+      - name: Push build log to branch (always)
+        if: always()
+        run: |
+          set -ux
+          [ -f build.log ] || echo "no build.log produced" > build.log
+          git config user.name "qemu-fullroot ci"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f build.log || true
+          git commit -m "qemu-fullroot run ${{ github.run_id }}" || true
+          git push origin HEAD:refs/heads/qemu-fullroot-log --force

@@ -1,0 +1,60 @@
++ trap 'echo BUILD_FAILED; sudo dmesg | tail -n 40' ERR
++ echo 'STAGE dd'
+STAGE dd
++ dd if=/dev/zero of=qemu-root.img bs=1M count=64 status=none
++ echo 'STAGE mkfs'
+STAGE mkfs
++ mkfs.hfsplus -s -J -v sweetroot qemu-root.img
+Initialized qemu-root.img as a 64 MB HFS Plus volume with a 512k journal
++ echo 'STAGE mount'
+STAGE mount
++ work=/home/runner/work/_temp/qemuroot
++ mkdir -p /home/runner/work/_temp/qemuroot
++ sudo mount -t hfsplus -o loop,force qemu-root.img /home/runner/work/_temp/qemuroot
++ echo 'STAGE populate'
+STAGE populate
++ sudo mkdir -p /home/runner/work/_temp/qemuroot/sbin /home/runner/work/_temp/qemuroot/dev /home/runner/work/_temp/qemuroot/private/var
++ sudo cp /home/runner/work/_temp/sweet-init /home/runner/work/_temp/qemuroot/sbin/launchd
++ sudo chmod 755 /home/runner/work/_temp/qemuroot/sbin/launchd
++ echo 'STAGE umount'
+STAGE umount
++ sudo umount /home/runner/work/_temp/qemuroot
++ echo 'STAGE fsck-y'
+STAGE fsck-y
++ fsck.hfsplus -f -y qemu-root.img
++ grep -v 'Illegal name'
+** qemu-root.img
+   Executing fsck_hfs (version 540.1-Linux).
+** Checking Journaled HFS Plus volume.
+** Detected a case-sensitive volume.
+   The volume name is sweetroot
+** Checking extents overflow file.
+** Checking catalog file.
+** Checking multi-linked files.
+** Checking catalog hierarchy.
+** Checking extended attributes file.
+** Checking volume bitmap.
+** Checking volume information.
+** The volume sweetroot appears to be OK.
++ echo 'STAGE fsck-n'
+STAGE fsck-n
++ fsck.hfsplus -f -n qemu-root.img
+** qemu-root.img (NO WRITE)
+   Executing fsck_hfs (version 540.1-Linux).
+** Checking Journaled HFS Plus volume.
+** Detected a case-sensitive volume.
+   The volume name is sweetroot
+** Checking extents overflow file.
+** Checking catalog file.
+** Checking multi-linked files.
+** Checking catalog hierarchy.
+** Checking extended attributes file.
+** Checking volume bitmap.
+** Checking volume information.
+** The volume sweetroot appears to be OK.
++ echo 'STAGE hash'
+STAGE hash
++ sha256sum qemu-root.img
+a087c76855db92ae1a313b881665c273e3234fbaa8aef82cdfc6ee4f426e0d49  qemu-root.img
++ echo BUILD_OK
+BUILD_OK

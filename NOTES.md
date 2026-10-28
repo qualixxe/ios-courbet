@@ -5,7 +5,7 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
-## Handoff (2026-10-28, later) — fail-safe QEMU harness; real-userland root in flight
+## Handoff (2026-10-28, later) — fail-safe QEMU harness; real-userland root in flight; launchd exec EINVAL found and patched
 
 **What happened since the section below**
 
@@ -45,10 +45,25 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
   beyond the kernel's declared RAM end 0x22cc00000 is memory the kernel never
   manages — the ADT `RAMDisk` memory-map entry reserves the in-RAM part).
 
-**Status**: CI building the lite root (in flight). Next: download the release
-parts, `research\qemu-fullroot.bat 240`, read `fb.txt` — the goal is real
-launchd starting on the courbet kernel in QEMU, closing the userspace coverage
-gap listed in the previous handoff.
+- **launchd exec EINVAL — ROOT CAUSE FOUND AND PATCHED** (commit `630f6d8`):
+  With the 6 GB root, QEMU boots the kernel, mounts the HFS+ root, and reaches
+  `exec /sbin/launchd` — but panics with `errno 22 (EINVAL) @ kern_exec.c:6929`.
+  Investigation (`qemu.log`, `fb.txt`, `symsweet.py`):
+  * Data Abort at `__bcopyout+0x1c`, FAR=0x4000 — `scratch_addr` from
+    `mach_vm_allocate_kernel()` is 0x4000 (near-NULL page), invalid for `copyout`.
+  * Root cause: `load_init_program()` in `bsd/kern/kern_exec.c:6878` calls
+    `mach_vm_allocate_kernel(current_map(), ...)`. `current_map()` returns the
+    **init process's user map** (bsd_init runs as pid 1 user process, not a
+    kernel thread), so the scratch page is allocated in user space at 0x4000
+    instead of kernel space. `copyout(path, 0x4000, ...)` faults → every exec
+    attempt fails → panic EINVAL.
+  * Fix: `xnu/patches/0085-sweet-fix-load-init-program-kernel-map.patch` —
+    change `current_map()` to `kernel_map` so `mach_vm_allocate_kernel` allocates
+    from the kernel map. Patch pushed as commit `630f6d8`; CI build in flight.
+
+**Status**: CI building kernel with patch 0085. When done, download new kernel
+(`%TEMP%\kernel.development.sweet`), `research\qemu-fullroot.bat 240`, read
+`fb.txt` — goal is real launchd starting on the courbet kernel in QEMU.
 
 **Commits 2026-10-28 (this section)**: `2a72bfc` (built-in Mach-O nm) →
 `0b4b6c1` (qemu-fullroot workflow) → `3e7648d` (streaming mkpayload/qemu-sweet)

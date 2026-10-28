@@ -136,6 +136,8 @@ jobs:
             --title "QEMU lite iOS root (20H392)" \
             --notes "LITE root for QEMU runs of ios-courbet: real launchd/dyld/shared cache, frameworks excluded (run ${{ github.run_id }}). Concatenate: cat qfull-* > qemu-fullroot.img.gz && gunzip." \
             qfull-* qemu-fullroot.sha256 build.log
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Push build log to branch (always)
         if: always()

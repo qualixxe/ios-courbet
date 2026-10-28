@@ -46,6 +46,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y hfsprogs
 
+      - name: Ensure hfsplus filesystem support
+        run: |
+          set -euxo pipefail
+          K=$(uname -r)
+          if ! sudo modprobe hfsplus 2>/dev/null; then
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$K"
+            sudo depmod -a "$K"
+            sudo modprobe hfsplus
+          fi
+          grep hfsplus /proc/filesystems
+          echo "hfsplus OK for kernel $K"
+
       - name: Build sweet-init (the QEMU /sbin/launchd)
         run: |
           set -eux

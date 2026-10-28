@@ -5,6 +5,55 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-10-28, later) — fail-safe QEMU harness; real-userland root in flight
+
+**What happened since the section below**
+
+- `tools/qemu-sweet.py` no longer needs `llvm-nm`: `--kernel` now decodes the
+  framebuffer with a built-in Mach-O symbol scan (`macho_defined_syms`, same
+  `LC_SYMTAB` walk `symsweet.py` uses). Combined with `--fail-on-panic` the
+  harness is **fail-safe**: exit 0 = no panic visible, 2 = panic decoded into
+  `fb.txt`, 3 = undecodable/blank. Verified on the green 64 MB run:
+  `{"status": "no_panic_observed", "unknown_glyphs": 0}` rc=0, and the same
+  run still reaches `*** SWEET userspace: init running as PID 1 ***`.
+  `fb.txt` (exact screen text) is now the primary read-out, `fb.png` the backup.
+- **Streaming rewrite for multi-GB roots** (commit `3e7648d`): `mkpayload.py
+  build()` and `qemu-sweet.py` read/copy the ramdisk in 8 MiB chunks and never
+  hold it in RAM (before: ~12 GB peak for a 6 GB image; the host has 16 GB).
+  Byte-exactness proven: the rebuilt 64 MB payload is SHA-identical to the one
+  that booted PID 1.
+- **`qemu-fullroot` CI workflow** (`.github/workflows/qemu-fullroot.yml`):
+  a **6 GB journaled HFS+ lite root with the real iOS 16.7.16 userland** —
+  real `/sbin/launchd`, dyld, the full shared cache, LaunchDaemons, /usr/lib,
+  /usr/libexec — minus everything dyld serves from the cache
+  (`tools/qemu-root-excludes.txt`: Frameworks/PrivateFrameworks/Extensions/
+  Fonts/Assets/usr/share/...), plus `tools/qemu-root-sysos-excludes.txt`
+  dropping the ~1.5 GB cache `.symbols` (debug-only). Same IPSW source and
+  `mkiosroot.sh` as `rootfs.yml`; the script gained optional
+  `MKIOSROOT_OS_EXCLUDE`/`MKIOSROOT_SYSOS_EXCLUDE` rsync exclude files and a
+  `du` of the sources in the log. Delivery: **GitHub Release `qemu-fullroot`**
+  (public, no token needed; split into <2 GB parts) + build log pushed to the
+  single-commit branch `qemu-fullroot-log`.
+- Run 1 (`40668334456`) failed with `No space left on device` while copying
+  `dyld_shared_cache_arm64.symbols` → fixed by the `.symbols` exclusion
+  (guess: after it, ~5.5 GB content fits the 6 GB volume; the run logs `du`).
+- `research/qemu-fullroot.bat`: one command — builds the 8 GB-highmem QEMU ADT
+  + payload and boots with `--fail-on-panic --kernel`; kills orphan QEMU first.
+- QEMU RAM sizing: `mkadt.py --qemu --highmem --mem 8` → payload
+  `mem_size = 0x17cc00000` → `qemu-sweet.py` picks `-m 8G` (virt RAM top
+  0x240000000 > payload top ~0x2314d0000 ✓; the tail of the 6 GB ramdisk
+  beyond the kernel's declared RAM end 0x22cc00000 is memory the kernel never
+  manages — the ADT `RAMDisk` memory-map entry reserves the in-RAM part).
+
+**Status**: CI building the lite root (in flight). Next: download the release
+parts, `research\qemu-fullroot.bat 240`, read `fb.txt` — the goal is real
+launchd starting on the courbet kernel in QEMU, closing the userspace coverage
+gap listed in the previous handoff.
+
+**Commits 2026-10-28 (this section)**: `2a72bfc` (built-in Mach-O nm) →
+`0b4b6c1` (qemu-fullroot workflow) → `3e7648d` (streaming mkpayload/qemu-sweet)
+→ `cdafe92` (.symbols exclusion + source `du`).
+
 ## Handoff (2026-10-28) — QEMU harness green to PID 1 on the flashed kernel; phone data abort still needs a photo
 
 **What happened since 10-27**

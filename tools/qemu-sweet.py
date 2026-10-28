@@ -58,18 +58,48 @@ def check_qemu_dependency(cpu='cortex-a76'):
     return True
 
 
+def macho_defined_syms(path):
+    """(address, name) for every N_SECT symbol in a Mach-O64 — replaces llvm-nm."""
+    import bisect  # noqa: F401  (kept local to this feature)
+    data = open(path, 'rb').read()
+    magic, = struct.unpack_from('<I', data, 0)
+    if magic != 0xfeedfacf:
+        raise ValueError(f'not Mach-O64: {magic:#010x}')
+    ncmds, = struct.unpack_from('<I', data, 16)
+    symtab = None
+    off = 32
+    for _ in range(ncmds):
+        cmd, cmdsize = struct.unpack_from('<II', data, off)
+        if cmd == 0x2:  # LC_SYMTAB
+            symoff, nsyms, stroff, strsize = struct.unpack_from('<4I', data, off + 8)
+            symtab = (symoff, nsyms, stroff)
+        off += cmdsize
+    if not symtab:
+        raise ValueError('no LC_SYMTAB (stripped)')
+    symoff, nsyms, stroff = symtab
+    syms = []
+    for i in range(nsyms):
+        strx, typ, sect, desc, value = struct.unpack_from('<IBBHQ', data, symoff + i * 16)
+        if value == 0 or strx == 0 or not typ & 0x0e:  # N_SECT = defined in section
+            continue
+        end = data.index(b'\0', stroff + strx)
+        syms.append((value, data[stroff + strx:end].decode('utf-8', 'replace')))
+    return syms
+
+
 def check_kernel_tools(kernel_path):
-    """Verify llvm-nm is available when --kernel is specified."""
-    if not shutil.which('llvm-nm'):
-        print('[!] Error: llvm-nm not found in PATH, required for --kernel font extraction.', file=sys.stderr)
-        print('    Install instructions:', file=sys.stderr)
-        print('      Arch Linux:    sudo pacman -S llvm', file=sys.stderr)
-        print('      Ubuntu/Debian: sudo apt install llvm', file=sys.stderr)
-        print('      Fedora:         sudo dnf install llvm', file=sys.stderr)
-        print('      macOS:          brew install llvm', file=sys.stderr)
-        return False
+    """Verify the kernel file exists; symbol lookup is built in (no llvm-nm needed)."""
     if not os.path.isfile(kernel_path):
         print(f'[!] Error: kernel file does not exist: {kernel_path}', file=sys.stderr)
+        return False
+    try:
+        fonts = [v for v, n in macho_defined_syms(kernel_path) if n == '_iso_font']
+    except ValueError as e:
+        print(f'[!] Error: {kernel_path}: {e}', file=sys.stderr)
+        return False
+    if len(fonts) != 1:
+        print(f'[!] Error: kernel must contain exactly one _iso_font symbol (found {len(fonts)})',
+              file=sys.stderr)
         return False
     return True
 
@@ -227,7 +257,7 @@ def main():
     ap.add_argument('--gdb', action='store_true', help='start halted, gdb stub on :1234, no timeout')
     ap.add_argument('--hmp', action='append', default=[], help='extra monitor command run after stop (repeatable), e.g. "x /8gx 0xfffffe..."')
     ap.add_argument('--cpu', default='cortex-a76', help='QEMU CPU model (default: cortex-a76)')
-    ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (uses llvm-nm)')
+    ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (built-in Mach-O nm)')
     ap.add_argument('--fail-on-panic', action='store_true', help='exit 2 for a visible panic, 3 for incomplete/blank decoding; requires --kernel')
     ap.add_argument('--live-serial', action='store_true', help='stream serial console output to stdout in real time')
     ap.add_argument('--check-env', action='store_true', help='check QEMU installation and dependencies without running a payload')
@@ -235,10 +265,7 @@ def main():
 
     if a.check_env:
         ok = check_qemu_dependency(a.cpu)
-        if shutil.which('llvm-nm'):
-            print('[*] llvm-nm found in PATH', file=sys.stderr)
-        else:
-            print('[!] Optional: llvm-nm not found (needed only when using --kernel for text decoding)', file=sys.stderr)
+        print('[*] Mach-O symbol lookup is built into qemu-sweet.py (no llvm-nm needed)', file=sys.stderr)
         return 0 if ok else 1
 
     if not a.payload or not a.outdir:
@@ -256,9 +283,7 @@ def main():
     payload = open(a.payload, 'rb').read()
     font = None
     if a.kernel:
-        symbols = subprocess.check_output(['llvm-nm', '--defined-only', a.kernel], text=True)
-        fonts = [int(line.split()[0], 16) for line in symbols.splitlines()
-                 if line.split()[-1:] == ['_iso_font']]
+        fonts = [v for v, n in macho_defined_syms(a.kernel) if n == '_iso_font']
         if len(fonts) != 1:
             ap.error('kernel must contain exactly one _iso_font symbol')
         font = payload_data(payload, fonts[0], 256 * 16)

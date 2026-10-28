@@ -104,29 +104,68 @@ def check_kernel_tools(kernel_path):
     return True
 
 
-def build_image(payload):
-    """Return (phys_base, ram_image, boot_args_pa, entry_pa)."""
-    magic, ver, nsegs = struct.unpack_from('<8sII', payload, 0)
-    assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
-    virt_base, entry_va, adt_off, adt_size, kernel_end, phys_base, mem_size = \
-        struct.unpack_from('<7Q', payload, 0x10)
-    cmdline = payload[0x48:0x48 + BOOT_LINE_LENGTH]
-    delta = phys_base - virt_base
-    adt_pa = kernel_end + delta
-    ba_pa = (adt_pa + adt_size + PAGE - 1) & ~(PAGE - 1)
+class Payload:
+    """A SWEETXNU payload on disk; segments are copied out by file offset, so
+    a multi-gigabyte ramdisk never has to be read into memory."""
+
+    def __init__(self, path):
+        self.path = path
+        with open(path, 'rb') as f:
+            head = f.read(0x2a8 + 32 * 64)	# header + segment table
+        magic, ver, nsegs = struct.unpack_from('<8sII', head, 0)
+        assert magic == b'SWEETXNU' and ver == 1, 'not a SWEETXNU v1 payload'
+        self.nsegs = nsegs
+        (self.virt_base, self.entry_va, self.adt_off, self.adt_size,
+         self.kernel_end, self.phys_base, self.mem_size) = struct.unpack_from('<7Q', head, 0x10)
+        self.cmdline = head[0x48:0x48 + BOOT_LINE_LENGTH]
+        self.segs = [struct.unpack_from('<4Q', head, 0x2a8 + 32 * i) for i in range(nsegs)]
+
+    def read_at(self, off, size):
+        with open(self.path, 'rb') as f:
+            f.seek(off)
+            data = f.read(size)
+        if len(data) != size:
+            raise ValueError('payload truncated')
+        return data
+
+    def data_by_va(self, va, size):
+        """Read initialized segment bytes by VA (the payload has no slide)."""
+        for vmaddr, vmsize, foff, fsize in self.segs:
+            if vmaddr <= va and va + size <= vmaddr + fsize:
+                return self.read_at(foff + va - vmaddr, size)
+        raise ValueError(f'VA {va:#x}+{size:#x} not in initialized payload segments')
+
+    def copy_to(self, dst, off, size, chunk=8 << 20):
+        with open(self.path, 'rb') as f:
+            f.seek(off)
+            while size:
+                data = f.read(min(chunk, size))
+                if not data:
+                    raise ValueError('payload truncated')
+                dst.write(data)
+                size -= len(data)
+
+
+def build_image(p, rambin):
+    """Stream the payload into rambin; returns (phys_base, boot_args_pa, entry_pa)."""
+    delta = p.phys_base - p.virt_base
+    adt_pa = p.kernel_end + delta
+    ba_pa = (adt_pa + p.adt_size + PAGE - 1) & ~(PAGE - 1)
     top = ba_pa + PAGE
-    img = bytearray(top - phys_base)
-    for i in range(nsegs):
-        vmaddr, vmsize, foff, fsize = struct.unpack_from('<4Q', payload, 0x2a8 + 32 * i)
-        o = vmaddr + delta - phys_base
-        img[o:o + fsize] = payload[foff:foff + fsize]
-    img[adt_pa - phys_base:adt_pa - phys_base + adt_size] = payload[adt_off:adt_off + adt_size]
-    ba = struct.pack('<HH4x4Q6QI4xQI', 2, 2, virt_base, phys_base, mem_size, top,
-                     FB_BASE, 1, FB_STRIDE, FB_W, FB_H, 32, 0, adt_pa - delta, adt_size)
-    ba += cmdline + b'\0' * 4 + struct.pack('<QQ', 0, mem_size)
-    assert len(ba) == 736
-    img[ba_pa - phys_base:ba_pa - phys_base + len(ba)] = ba
-    return phys_base, bytes(img), ba_pa, entry_va + delta
+    with open(rambin, 'wb') as out:
+        out.truncate(top - p.phys_base)
+        for vmaddr, vmsize, foff, fsize in p.segs:
+            out.seek(vmaddr + delta - p.phys_base)
+            p.copy_to(out, foff, fsize)
+        out.seek(adt_pa - p.phys_base)
+        p.copy_to(out, p.adt_off, p.adt_size)
+        ba = struct.pack('<HH4x4Q6QI4xQI', 2, 2, p.virt_base, p.phys_base, p.mem_size, top,
+                         FB_BASE, 1, FB_STRIDE, FB_W, FB_H, 32, 0, adt_pa - delta, p.adt_size)
+        ba += p.cmdline + b'\0' * 4 + struct.pack('<QQ', 0, p.mem_size)
+        assert len(ba) == 736
+        out.seek(ba_pa - p.phys_base)
+        out.write(ba)
+    return p.phys_base, ba_pa, p.entry_va + delta
 
 
 def stub(ba_pa, entry_pa):
@@ -145,17 +184,6 @@ def write_png(path, raw):
     png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', FB_W, FB_H, 8, 2, 0, 0, 0))
     png += chunk(b'IDAT', zlib.compress(b''.join(rows), 6)) + chunk(b'IEND', b'')
     open(path, 'wb').write(png)
-
-
-def payload_data(payload, va, size):
-    """Read initialized segment bytes by VA (the payload has no slide)."""
-    nsegs = struct.unpack_from('<I', payload, 12)[0]
-    for i in range(nsegs):
-        vmaddr, _, foff, fsize = struct.unpack_from('<4Q', payload, 0x2a8 + 32 * i)
-        if vmaddr <= va and va + size <= vmaddr + fsize:
-            offset = foff + va - vmaddr
-            return payload[offset:offset + size]
-    raise ValueError(f'VA {va:#x}+{size:#x} not in initialized payload segments')
 
 
 def decode_screen(raw, font):
@@ -280,18 +308,17 @@ def main():
     if a.kernel and not check_kernel_tools(a.kernel):
         return 1
 
-    payload = open(a.payload, 'rb').read()
+    p = Payload(a.payload)
     font = None
     if a.kernel:
         fonts = [v for v, n in macho_defined_syms(a.kernel) if n == '_iso_font']
         if len(fonts) != 1:
             ap.error('kernel must contain exactly one _iso_font symbol')
-        font = payload_data(payload, fonts[0], 256 * 16)
+        font = p.data_by_va(fonts[0], 256 * 16)
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir)
 
-    phys_base, img, ba_pa, entry_pa = build_image(payload)
-    open(f'{out}/ram.bin', 'wb').write(img)
+    phys_base, ba_pa, entry_pa = build_image(p, f'{out}/ram.bin')
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
 
@@ -306,7 +333,7 @@ def main():
             os.unlink(mon)
         qmp_arg = f'unix:{mon},server,nowait'
     # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
-    mem_size = struct.unpack_from('<Q', payload, 0x40)[0]
+    mem_size = p.mem_size
     ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
            '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', qmp_arg,

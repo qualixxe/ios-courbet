@@ -26,7 +26,7 @@ ADT and boot_args, inside topOfKernelData (never handed to the VM), and the
 ADT gets /chosen/memory-map "RAMDisk" = <phys, size> for IOFindBSDRoot to
 turn into md0 (boot with rd=md0).
 """
-import argparse, os, struct, sys
+import argparse, io, os, shutil, struct, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adt  # noqa: E402
@@ -140,7 +140,13 @@ def adt_dram(adt_blob):
             struct.unpack('<Q', chosen.prop('dram-size'))[0])
 
 
-def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
+def build(kernel_path, adt_path, cmdline, ramdisk_path=None, out_path=None):
+    """Assemble the payload; returns (blob_or_None, info).
+
+    The ramdisk is streamed from its file in 8 MiB chunks and only its size
+    is needed for the layout, so a multi-gigabyte root image never lives in
+    memory. With out_path the payload is written there and blob is None.
+    """
     buf = bytearray(open(kernel_path, 'rb').read())
     m = parse_macho(buf)
     nfix = apply_chained_fixups(buf, m)
@@ -158,39 +164,61 @@ def build(kernel_path, adt_path, cmdline, ramdisk_path=None):
     PHYS_BASE, MEM_SIZE = adt_dram(adt_blob)
     pieces = [(s['vmaddr'], s['vmsize'], buf[s['fileoff']:s['fileoff'] + s['filesize']]) for s in segs]
     ramdisk = None
+    rd_raw = 0
     if ramdisk_path:
-        image = open(ramdisk_path, 'rb').read()
-        rd_size = (len(image) + PAGE - 1) & ~(PAGE - 1)
+        rd_raw = os.path.getsize(ramdisk_path)
+        rd_size = (rd_raw + PAGE - 1) & ~(PAGE - 1)
         rd_va = kernel_end
         kernel_end = rd_va + rd_size
         rd_pa = rd_va - virt_base + PHYS_BASE
-        pieces.append((rd_va, rd_size, image))
+        pieces.append((rd_va, rd_size, None))	# data streamed from the file
         adt_blob = add_ramdisk_to_adt(adt_blob, rd_pa, rd_size)
         ramdisk = (hex(rd_pa), hex(rd_size))
 
     hdr_size = SEG_TABLE + 32 * len(pieces)
-    out = bytearray(hdr_size)
     seg_table = []
-    for vmaddr, vmsize, data in pieces:
-        off = len(out)
-        out += data
-        out += b'\0' * (-len(out) & 0xf)
-        seg_table.append((vmaddr, vmsize, off, len(data)))
-    adt_off = len(out)
-    out += adt_blob
-    out += b'\0' * (-len(out) & 0xf)
+    off = hdr_size
+    for i, (vmaddr, vmsize, data) in enumerate(pieces):
+        size = rd_raw if data is None else len(data)
+        seg_table.append((vmaddr, vmsize, off, size))
+        off += size
+        off += -off & 0xf
+    adt_off = off
 
-    struct.pack_into('<8sII', out, 0, b'SWEETXNU', 1, len(pieces))
-    struct.pack_into('<7Q', out, 0x10, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
+    hdr = bytearray(hdr_size)
+    struct.pack_into('<8sII', hdr, 0, b'SWEETXNU', 1, len(pieces))
+    struct.pack_into('<7Q', hdr, 0x10, virt_base, m['entry'], adt_off, len(adt_blob), kernel_end,
                      PHYS_BASE, MEM_SIZE)
     cl = cmdline.encode()[:BOOT_LINE_LENGTH - 1]
-    out[CMDLINE:CMDLINE + len(cl)] = cl
+    hdr[CMDLINE:CMDLINE + len(cl)] = cl
     for i, t in enumerate(seg_table):
-        struct.pack_into('<4Q', out, SEG_TABLE + 32 * i, *t)
+        struct.pack_into('<4Q', hdr, SEG_TABLE + 32 * i, *t)
+
+    def emit(out):
+        out.write(hdr)
+        for vmaddr, vmsize, data in pieces:
+            if data is None:
+                with open(ramdisk_path, 'rb') as src:
+                    shutil.copyfileobj(src, out, 8 << 20)
+            else:
+                out.write(data)
+            out.write(b'\0' * (-out.tell() & 0xf))
+        out.write(adt_blob)
+        out.write(b'\0' * (-out.tell() & 0xf))
+
+    if out_path:
+        with open(out_path, 'wb') as f:
+            emit(f)
+        blob = None
+    else:
+        bio = io.BytesIO()
+        emit(bio)
+        blob = bio.getvalue()
     info = dict(cputype=hex(m['cputype']), cpusub=m['cpusub'], fixups=nfix, virt_base=hex(virt_base),
-                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk, size=len(out),
+                entry=hex(m['entry']), kernel_end=hex(kernel_end), ramdisk=ramdisk,
+                size=adt_off + len(adt_blob) + (-adt_off - len(adt_blob) & 0xf),
                 segs=[(s['name'], hex(s['vmaddr']), hex(s['vmsize'])) for s in segs])
-    return bytes(out), info
+    return blob, info
 
 
 if __name__ == '__main__':
@@ -199,8 +227,7 @@ if __name__ == '__main__':
     ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1')
     ap.add_argument('--ramdisk', help='root image for md0 (boot with rd=md0)')
     a = ap.parse_args()
-    blob, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk)
-    open(a.out, 'wb').write(blob)
+    _, info = build(a.kernel, a.adt, a.cmdline, a.ramdisk, out_path=a.out)
     for k, v in info.items():
         if k != 'segs':
             print(f'{k}: {v}')

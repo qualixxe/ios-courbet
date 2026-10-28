@@ -147,7 +147,7 @@ class Payload:
 
 
 def build_image(p, rambin):
-    """Stream the payload into rambin; returns (phys_base, boot_args_pa, entry_pa)."""
+    """Stream the payload into rambin; returns (phys_base, boot_args_pa, entry_pa, top)."""
     delta = p.phys_base - p.virt_base
     adt_pa = p.kernel_end + delta
     ba_pa = (adt_pa + p.adt_size + PAGE - 1) & ~(PAGE - 1)
@@ -165,7 +165,7 @@ def build_image(p, rambin):
         assert len(ba) == 736
         out.seek(ba_pa - p.phys_base)
         out.write(ba)
-    return p.phys_base, ba_pa, p.entry_va + delta
+    return p.phys_base, ba_pa, p.entry_va + delta, top
 
 
 def stub(ba_pa, entry_pa):
@@ -318,9 +318,10 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir)
 
-    phys_base, ba_pa, entry_pa = build_image(p, f'{out}/ram.bin')
+    phys_base, ba_pa, entry_pa, top = build_image(p, f'{out}/ram.bin')
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
-    print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x}', file=sys.stderr)
+    print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x} top={top:#x}',
+          file=sys.stderr)
 
     if os.name == 'nt':
         with socket.socket() as probe:	# free TCP port for QMP (no AF_UNIX on Windows builds)
@@ -332,9 +333,11 @@ def main():
         if os.path.exists(mon):
             os.unlink(mon)
         qmp_arg = f'unix:{mon},server,nowait'
-    # virt RAM starts at 0x40000000: cover the payload's RAM (mkadt.py --highmem needs 8G).
+    # virt RAM starts at 0x40000000. It must cover both the kernel's declared
+    # RAM (phys_base + mem_size) and everything loaded into it — a multi-GB
+    # ramdisk pushes `top` (ADT + boot_args end) past the declared RAM end.
     mem_size = p.mem_size
-    ram_gib = max(4, -(-(phys_base + mem_size - 0x40000000) // (1 << 30)))
+    ram_gib = max(4, -(-(max(phys_base + mem_size, top) - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
            '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', qmp_arg,
            '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',

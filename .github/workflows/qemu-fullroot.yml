@@ -23,6 +23,7 @@ on:
     paths:
       - 'tools/mkiosroot.sh'
       - 'tools/qemu-root-excludes.txt'
+      - 'tools/qemu-root-sysos-excludes.txt'
       - '.github/workflows/qemu-fullroot.yml'
 
 permissions:
@@ -113,6 +114,7 @@ jobs:
           sudo modprobe loop 2>/dev/null || true
           sudo modprobe hfsplus 2>/dev/null || true
           sudo env MKIOSROOT_OS_EXCLUDE="$PWD/tools/qemu-root-excludes.txt" \
+            MKIOSROOT_SYSOS_EXCLUDE="$PWD/tools/qemu-root-sysos-excludes.txt" \
             bash tools/mkiosroot.sh dmgs/os.dmg dmgs/sysos.dmg dmgs/appos.dmg qemu-fullroot.img 6G 2>&1 | tee build.log
           ls -lh qemu-fullroot.img
           df -h .

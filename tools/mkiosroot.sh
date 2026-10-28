@@ -86,8 +86,11 @@ copy() {
 	# QEMU lite root to drop everything dyld serves from the shared cache.
 	sudo rsync -aH --numeric-ids "$@" "$src/" "$dst/"
 }
+# How much room the sources need (mkiosroot does not know the copy order's
+# peak; this line is what tells a "No space left on device" which side lied).
+sudo du -sh "$work/os/root" "$work/sysos/root" "$work/appos/root" || true
 copy "$work/os/root" "$work/root" ${MKIOSROOT_OS_EXCLUDE:+--exclude-from="$MKIOSROOT_OS_EXCLUDE"}
-copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
+copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS" ${MKIOSROOT_SYSOS_EXCLUDE:+--exclude-from="$MKIOSROOT_SYSOS_EXCLUDE"}
 copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
 
 # Shared cache where dyld looks at ignition level 1: hard links, no extra space.

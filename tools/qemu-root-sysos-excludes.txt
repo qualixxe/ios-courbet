@@ -1,0 +1,6 @@
+# rsync excludes for the SystemOS-cryptex copy of the QEMU lite root
+# (mkiosroot.sh with MKIOSROOT_SYSOS_EXCLUDE set). The .symbols file is the
+# debug-symbol companion of the dyld shared cache (~1.5 GB): dyld never reads
+# it at boot, and it does not fit the 6 GB QEMU volume. Paths are relative to
+# the SystemOS root.
+System/Library/Caches/com.apple.dyld/*.symbols

@@ -18,7 +18,10 @@ import adt  # noqa: E402
 
 # Kernel-managed RAM: above every Qualcomm XPU carve-out (see NOTES.md)
 PHYS_BASE = 0xb0000000
-MEM_SIZE = 0x4d000000
+# QEMU virt board: 6.75 GiB managed RAM — enough for a 6 GiB ramdisk root + kernel
+# segments + ADT + boot_args that precede it. (Phone uses --highmem, so this
+# lowmem value only affects QEMU.)
+MEM_SIZE = 0x1b0000000
 # Panic log buffer, carved from the TOP of the dram range and exposed to XNU as
 # /pram + /chosen/embedded-panic-log-size. Without it, pe_init.c's
 # check_for_panic_log() leaves gPanicBase == 0, debug_log_init() bails out twice

@@ -159,7 +159,8 @@ def build_image(p, rambin):
             p.copy_to(out, foff, fsize)
         out.seek(adt_pa - p.phys_base)
         p.copy_to(out, p.adt_off, p.adt_size)
-        ba = struct.pack('<HH4x4Q6QI4xQI', 2, 2, p.virt_base, p.phys_base, p.mem_size, top,
+        ba = struct.pack('<HH4x4Q6QI4xQI', 2, 2, p.virt_base, p.phys_base, p.mem_size,
+                         min(top, p.phys_base + p.mem_size),	# topOfKernelData: must not exceed managed RAM
                          FB_BASE, 1, FB_STRIDE, FB_W, FB_H, 32, 0, adt_pa - delta, p.adt_size)
         ba += p.cmdline + b'\0' * 4 + struct.pack('<QQ', 0, p.mem_size)
         assert len(ba) == 736

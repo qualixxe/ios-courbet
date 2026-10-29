@@ -19,6 +19,11 @@ framebuffer using its iso_font into fb.txt and write result.json. This is a
 snapshot of the circular screen, not a complete boot log. --fail-on-panic
 returns 2 when a panic is visible; absence of a panic does not prove boot.
 An undecodable or blank screen returns 3 with --fail-on-panic.
+
+The screen only holds the last 75 lines, so when the kernel carries the
+console ring of xnu/patches/0047 (`_sweet_log_ring`), its whole content is
+read straight out of guest RAM and written to console.txt — every line that
+ever reached the console, in order, including the ones already scrolled away.
 """
 import argparse, json, os, shutil, socket, struct, subprocess, sys, time, zlib
 
@@ -27,6 +32,7 @@ FB_STRIDE = FB_W * 4
 PAGE = 0x4000
 STUB_PA = 0x40200000	# above the dtb QEMU places at RAM base
 BOOT_LINE_LENGTH = 608
+LOG_SIZE = 4 << 20	# SWEET_LOG_SIZE in xnu/patches/0047
 
 
 def check_qemu_dependency(cpu='cortex-a76'):
@@ -246,11 +252,28 @@ def qmp(target, *cmds, pmemsave=None):
             print(f'qmp {c!r}: {r["error"]}', file=sys.stderr)
         out.append(r.get('return', ''))
     if pmemsave:	# native QMP: HMP's argument parser chokes on '-' in paths
-        r = call('pmemsave', val=pmemsave[0], size=pmemsave[1], filename=pmemsave[2])
-        if 'error' in r:
-            print(f'qmp pmemsave: {r["error"]}', file=sys.stderr)
+        for val, size, filename in (pmemsave if isinstance(pmemsave, list) else [pmemsave]):
+            r = call('pmemsave', val=val, size=size, filename=filename)
+            if 'error' in r:
+                print(f'qmp pmemsave {filename}: {r["error"]}', file=sys.stderr)
     s.close()
     return out
+
+
+def console_text(blob, ring_pa, total_pa, start):
+    """Rebuild the kernel console ring (xnu/patches/0047) from a guest-RAM dump.
+
+    The ring holds the last LOG_SIZE bytes the console saw, oldest first at
+    total % LOG_SIZE once it has wrapped.
+    """
+    total = struct.unpack_from('<Q', blob, total_pa - start)[0]
+    ring = blob[ring_pa - start: ring_pa - start + LOG_SIZE]
+    if total <= LOG_SIZE:
+        data = ring[:total]
+    else:
+        at = total % LOG_SIZE
+        data = ring[at:] + ring[:at]
+    return data.decode('utf-8', 'replace')
 
 
 def stream_serial_file(serial_path, file_pos, out_stream=sys.stdout):
@@ -311,11 +334,14 @@ def main():
 
     p = Payload(a.payload)
     font = None
+    log_syms = {}
     if a.kernel:
-        fonts = [v for v, n in macho_defined_syms(a.kernel) if n == '_iso_font']
+        syms = macho_defined_syms(a.kernel)
+        fonts = [v for v, n in syms if n == '_iso_font']
         if len(fonts) != 1:
             ap.error('kernel must contain exactly one _iso_font symbol')
         font = p.data_by_va(fonts[0], 256 * 16)
+        log_syms = {n: v for v, n in syms if n in ('_sweet_log_ring', '_sweet_log_total')}
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir)
 
@@ -323,6 +349,16 @@ def main():
     open(f'{out}/stub.bin', 'wb').write(stub(ba_pa, entry_pa))
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x} top={top:#x}',
           file=sys.stderr)
+
+    # The payload is placed with no slide (kernel VA virt_base -> phys_base), so
+    # any static kernel address maps to physical by the same delta.
+    log_save = None
+    if len(log_syms) == 2:
+        delta = phys_base - p.virt_base
+        ring_pa = log_syms['_sweet_log_ring'] + delta
+        total_pa = log_syms['_sweet_log_total'] + delta
+        start = min(ring_pa, total_pa) & ~(PAGE - 1)
+        log_save = (start, ring_pa + LOG_SIZE - start, f'{out}/console.raw', ring_pa, total_pa)
 
     if os.name == 'nt':
         with socket.socket() as probe:	# free TCP port for QMP (no AF_UNIX on Windows builds)
@@ -370,7 +406,10 @@ def main():
 
         result = {'status': 'qemu_exited', 'qemu_returncode': p.returncode}
         if p.poll() is None:
-            _, regs, *extra = qmp(mon, 'stop', 'info registers', *a.hmp, pmemsave=(FB_BASE, FB_STRIDE * FB_H, f'{out}/fb.raw'))
+            saves = [(FB_BASE, FB_STRIDE * FB_H, f'{out}/fb.raw')]
+            if log_save:
+                saves.append(log_save[:3])
+            _, regs, *extra = qmp(mon, 'stop', 'info registers', *a.hmp, pmemsave=saves)
             open(f'{out}/regs.txt', 'w').write(regs + ''.join(f'\n(qemu) {c}\n{r}' for c, r in zip(a.hmp, extra)))
             p.kill()
             p.wait()
@@ -382,12 +421,18 @@ def main():
                 open(f'{out}/fb.txt', 'w').write(screen)
                 result = screen_result(screen, unknown)
             os.unlink(f'{out}/fb.raw')
+            if log_save:
+                blob = open(log_save[2], 'rb').read()
+                open(f'{out}/console.txt', 'w').write(
+                    console_text(blob, log_save[3], log_save[4], log_save[0]))
+                os.unlink(log_save[2])
         else:
             print(f'qemu exited early: {p.returncode}', file=sys.stderr)
 
         open(f'{out}/result.json', 'w').write(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result), file=sys.stderr)
-        print(f'{out}/fb.png  {out}/regs.txt  {out}/qemu.log', file=sys.stderr)
+        print(f'{out}/fb.png  {out}/regs.txt  {out}/qemu.log' +
+              (f'  {out}/console.txt' if log_save else ''), file=sys.stderr)
         if a.fail_on_panic and result['status'] == 'panic':
             return 2
         if a.fail_on_panic and result['status'] in ('incomplete_decode', 'blank_screen'):

@@ -116,7 +116,23 @@
  	proc_transend(p, 0);
  
  bad_notrans:
-@@ -5215,6 +5240,7 @@
+@@ -4970,6 +4995,7 @@
+ #if CONFIG_MACF
+ 	if (uap->mac_p != USER_ADDR_NULL) {
+ 		error = mac_execve_enter(uap->mac_p, imgp);
++		printf("execdbg: mac_execve_enter errno=%d\n", error);
+ 		if (error) {
+ 			goto exit_with_error;
+ 		}
+@@ -5048,6 +5074,7 @@
+ 
+ 		exec_resettextvp(p, imgp);
+ 		error = process_signature(p, imgp);
++		printf("execdbg: process_signature errno=%d\n", error);
+ 	}
+ 
+ #if defined(HAS_APPLE_PAC)
+@@ -5215,6 +5242,7 @@
  		proc_rele(p);
  	}
  
@@ -124,7 +140,7 @@
  	uthread_set_exec_data(current_uthread(), NULL);
  	kfree_type(typeof(*__execve_data), __execve_data);
  
-@@ -6769,6 +6795,7 @@
+@@ -6769,6 +6797,7 @@
  	size_t path_length = strlen(path) + 1;
  	argv0 = scratch_addr;
  	error = copyout(path, argv0, path_length);
@@ -132,7 +148,7 @@
  	if (error) {
  		return error;
  	}
-@@ -6800,6 +6827,7 @@
+@@ -6800,6 +6829,7 @@
  		argv64bit[2] = USER_ADDR_NULL;
  
  		error = copyout(argv64bit, scratch_addr, sizeof(argv64bit));
@@ -140,7 +156,7 @@
  		if (error) {
  			return error;
  		}
-@@ -6828,7 +6856,9 @@
+@@ -6828,7 +6858,9 @@
  	 */
  	set_security_token(p);
  
@@ -151,7 +167,7 @@
  }
  
  static const char * init_programs[] = {
-@@ -6880,6 +6910,9 @@
+@@ -6880,6 +6912,9 @@
  	mach_vm_size_t map_page_size = vm_map_page_size(map);
  
  	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);

@@ -149,6 +149,11 @@ jobs:
         run: |
           git config user.name "xnu ci"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # GitHub rejects blobs over 100 MB. fakeroot drops the kernel (16 MB,
+          # what we actually boot) next to a `.link/` tree holding a 128 MB
+          # static archive — run 40726945021 failed the push on exactly that.
+          find out -maxdepth 1 \( -name '*.link' -o -name '*.unstripped' -o -name '*.dSYM' \) -exec rm -rf {} +
+          du -sh out/* | sed 's/^/artifact: /'
           git add -f out/ 2>/dev/null || true
           git commit -m "xnu kernel ${{ github.run_id }}" || true
           git push origin HEAD:refs/heads/xnu-kernel-artifact --force

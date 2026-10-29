@@ -63,7 +63,7 @@ the iOS-platform policy branches.
 
 **New patch: `xnu/patches/0085-sweet-exec-diagnostic-log.patch`** — 18 `printf`
 checkpoints along exactly that path, so one boot pins the return site:
-the map identity of the scratch page (`argmap`/`cur_map`/`thread_map`/`scratch`),
+the map identity of the scratch page (`argmap`/`cur_map`/`kernel_map`/`scratch`),
 each `copyout` in `load_init_program_at_path`, `namei`, `exec_check_permissions`
 (+ `va_mode`), the first-page `vn_rdwr` (+ `resid`), the Mach-O header we read,
 `exec_extract_strings`, `load_machfile` (+ `load_return_to_errno`), `activate_exec_state`,
@@ -75,10 +75,46 @@ exits of `exec_mach_imgact` (`bad:` / `badtoolate:` + exit-reason code),
 `fix_hunks.py` ×2 → 85 files, 0 corrections; `verify_patches.py` → 668 lines,
 chain OK.
 
-**Next**: wait for `xnu.yml`, then `git fetch origin xnu-kernel-artifact` and
-install that kernel over `%TEMP%\kernel.development.sweet` (the Artifacts API
-401s — the branch is the delivery channel), run `research\qemu-fullroot.bat 240`
-and read the first `execdbg:` line whose value is 22.
+**The first CI attempt (`40865408832`, head `91bb109`) did not compile — one
+error, and the log explains both of our defects.**
+
+```
+kern_exec.c:6915:42: error: incomplete definition of type 'struct thread'
+            map, current_map(), current_thread()->map, ...
+debug.h:600:8: note: forward declaration of 'struct thread'
+```
+
+BSD code only ever sees a forward-declared `struct thread`, so the `thread_map`
+checkpoint cannot dereference it. It now prints
+`map` / `current_map()` / `kernel_map` + `is_kernel` instead, which answers the
+same question ("is the scratch page in the map init can copy out of?") —
+`kernel_map` is reachable through `<vm/vm_kern.h>`, already included twice.
+The same log caught a second, silent defect: the `execve()` checkpoint had been
+inserted *after* `return execve(...)`, so it was dead code
+(`warning: code will never be executed [-Wunreachable-code]` at 6860) — it now
+replaces that line. And one useful negative: clang reported **exactly one**
+error in the file, which proves every other expression in the patch
+(`imgp->ip_argc`, `load_result.dynlinker`, `exec_failure_reason->osr_code`,
+`proc_is64bit(p)`, `ip_vattr->va_mode`) is legal in this tree.
+
+**Delivery channels are now scripted** (`gh` works: it has a keyring login for
+`qualixxe` but prefers an invalid `GH_TOKEN` from the environment, so both
+scripts delete the token vars before calling it):
+
+- `research/ci-log.py [run-id]` — pulls the failing job's full log and prints
+  only the `error:` / `corrupt patch` / `make: ***` lines (124 465 lines → 20).
+  Without it this diagnosis needed a token we do not have.
+- `research/get-kernel.py` — fetches `xnu-kernel-artifact`, installs `kernel.*`
+  over `%TEMP%\kernel.development.sweet`, **fails** unless the binary contains
+  `_sweet_log_ring` + `_sweet_log_total`, and reports how many of the `printf`
+  literals found in `xnu/patches/*.patch` are present in the kernel. That last
+  count is what would have caught "we booted an Oct-27 kernel all day".
+
+**Next**: push the fixed patch, wait for `xnu.yml` to go green, then
+`python research/get-kernel.py` (fetch + verify + install), `research\qemu-fullroot.bat 240`,
+and read `research/qfull*/console.txt` for the **first** `execdbg:` line whose
+errno is 22. If `get-kernel.py` prints `MISS execdbg:` the shipped kernel is
+stale — do not run QEMU against it.
 
 ## Handoff (2026-10-28, later) — fail-safe QEMU harness; real-userland root in flight; launchd exec EINVAL found and patched
 

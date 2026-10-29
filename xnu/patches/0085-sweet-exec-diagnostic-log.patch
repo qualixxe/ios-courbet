@@ -140,22 +140,23 @@
  		if (error) {
  			return error;
  		}
-@@ -6829,6 +6857,9 @@
+@@ -6828,7 +6856,9 @@
+ 	 */
  	set_security_token(p);
  
- 	return execve(p, &init_exec_args, retval);
+-	return execve(p, &init_exec_args, retval);
 +	error = execve(p, &init_exec_args, retval);
 +	printf("execdbg: execve(%s) errno=%d retval=%d\n", path, error, retval[0]);
 +	return error;
  }
  
  static const char * init_programs[] = {
-@@ -6880,6 +6911,9 @@
+@@ -6880,6 +6910,9 @@
  	mach_vm_size_t map_page_size = vm_map_page_size(map);
  
  	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
-+	printf("execdbg: argmap=%p cur_map=%p thread_map=%p scratch=0x%lx psize=0x%lx proc64=%d\n",
-+	    map, current_map(), current_thread()->map, (unsigned long)scratch_addr,
++	printf("execdbg: argmap=%p cur_map=%p kernel_map=%p is_kernel=%d scratch=0x%lx psize=0x%lx proc64=%d\n",
++	    map, current_map(), kernel_map, (map == kernel_map), (unsigned long)scratch_addr,
 +	    (unsigned long)map_page_size, proc_is64bit(p));
  #if CONFIG_MEMORYSTATUS
  	(void) memorystatus_init_at_boot_snapshot();

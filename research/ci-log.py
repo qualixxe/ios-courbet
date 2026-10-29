@@ -4,7 +4,8 @@
 The artifacts API 401s for us, and `gh` picks an invalid GH_TOKEN before the
 working keyring login, so both have to be worked around.
 
-Usage:  python research/ci-log.py [run-id]
+Usage:  python research/ci-log.py [run-id]          # finished run, failing job
+        python research/ci-log.py [run-id] --live    # the job running right now
 """
 import json, os, re, subprocess, sys
 
@@ -30,26 +31,38 @@ def latest_run(workflow):
 
 
 def main():
-    run_id = sys.argv[1] if len(sys.argv) > 1 else latest_run('xnu.yml')
-    r = gh('run', 'view', run_id, '--json', 'conclusion,jobs')
+    live = '--live' in sys.argv
+    args = [a for a in sys.argv[1:] if a != '--live']
+    run_id = args[0] if args else latest_run('xnu.yml')
+    r = gh('run', 'view', run_id, '--json', 'status,conclusion,jobs')
     if r.returncode:
         sys.exit(r.stderr.strip())
     info = json.loads(r.stdout)
-    failed = [j for j in info['jobs'] if j.get('conclusion') == 'failure']
-    if not failed:
+    # a run in progress has no conclusion yet: watch the job it is running now
+    job = next((j for j in info['jobs'] if j.get('conclusion') == 'failure'), None)
+    if job is None:
+        job = next((j for j in info['jobs'] if j.get('status') != 'completed'), None)
+    if job is None:
         print(f"run {run_id}: {info['conclusion']}, no failed job")
         return
-    job = failed[0]
-    print(f"run {run_id} job {job['name']} ({job['databaseId']}) {job['conclusion']}")
-    log = gh('run', 'view', '--job', str(job['databaseId']), '--log')
+    job_id = job['databaseId']
+    print(f"run {run_id} job {job['name']} ({job_id}) {job.get('conclusion') or job['status']}")
+    if live:
+        # gh run view --log only serves completed jobs; the REST endpoint streams
+        # the in-progress one, which is how you catch the error before the run dies
+        log = gh('api', f'repos/{REPO}/actions/jobs/{job_id}/logs')
+    else:
+        log = gh('run', 'view', '--job', str(job_id), '--log')
     if log.returncode:
         sys.exit('log fetch failed: ' + log.stderr[:300])
     hits = [re.sub(r'\x1b\[[0-9;]*m', '', re.sub(r'^\S+\t\S+\t[\dT:.\-]*Z?\s*', '', l))
             for l in log.stdout.splitlines()
             if re.search(r'\berror:|corrupt patch|hunk FAILED|Error [0-9]+$', l)]
-    print(f"{len(log.stdout.splitlines())} log lines, {len(hits)} error lines")
-    for l in hits[:40]:
-        print(l)
+    noise = sum(1 for l in hits if 'already exists in working directory' in l or 'does not apply' in l)
+    print(f"{len(log.stdout.splitlines())} log lines, {len(hits)} error lines ({noise} are blacktop's known skips)")
+    for l in hits:
+        if 'already exists in working directory' not in l and 'does not apply' not in l:
+            print(l)
 
 
 if __name__ == '__main__':

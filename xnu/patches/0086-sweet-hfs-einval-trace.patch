@@ -1,0 +1,127 @@
+--- a/bsd/sweet_hfs/core/hfs_lookup.c
++++ b/bsd/sweet_hfs/core/hfs_lookup.c
+@@ -224,6 +224,14 @@
+ 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+ 
+ 		retval = cat_lookup(hfsmp, &cndesc, 0, force_casesensitive_lookup, &desc, &attr, &fork, NULL);
++		{
++			char nbuf[40];
++			int nl = cnp->cn_namelen < 39 ? cnp->cn_namelen : 39;
++			bcopy(cnp->cn_nameptr, nbuf, nl);
++			nbuf[nl] = 0;
++			printf("hfsdbg: lookup '%s' parent=%u -> %d\n", nbuf,
++			    (unsigned)dcp->c_fileid, retval);
++		}
+ 		
+ 		hfs_systemfile_unlock(hfsmp, lockflags);
+ 
+--- a/bsd/sweet_hfs/core/hfs_catalog.c
++++ b/bsd/sweet_hfs/core/hfs_catalog.c
+@@ -1007,6 +1007,8 @@
+ 	    *desc_cnid = cnid;
+ 	}
+ exit:
++	printf("hfsdbg: cat_lookupbykey parent=%u name_len=%u -> %d\n",
++	    (unsigned)keyp->hfsPlus.parentID, (unsigned)keyp->hfsPlus.nodeName.length, result);
+ 	hfs_free_type(iterator, struct BTreeIterator);
+ 	hfs_free_type(recp, CatalogRecord);
+ 
+@@ -3533,6 +3535,8 @@
+ 	key->nodeName.length = unicodeBytes / sizeof(UniChar);
+ 	key->keyLength = kHFSPlusCatalogKeyMinimumLength + unicodeBytes;
+ 	if (result) {
++		printf("hfsdbg: buildkey parent=%u name_len=%u utf8err=%d\n",
++		    (unsigned)descp->cd_parentcnid, (unsigned)descp->cd_namelen, result);
+ 		if (result != ENAMETOOLONG)
+ 			result = EINVAL;  /* name has invalid characters */
+ 		return (result);
+--- a/bsd/sweet_hfs/core/FileExtentMapping.c
++++ b/bsd/sweet_hfs/core/FileExtentMapping.c
+@@ -264,6 +264,10 @@
+ 	if (foundHint)
+ 		*foundHint = btIterator->hint.nodeNum;
+ 
++	if (err != noErr) {
++		printf("hfsdbg: FindExtentRecord cnid=%u fork=%d fabn=%u -> %d\n",
++		    (unsigned)fileID, (int)forkType, (unsigned)startBlock, err);
++	}
+ 	hfs_free_type(btIterator, struct BTreeIterator);
+ 	return err;
+ }
+@@ -391,6 +395,11 @@
+ 	sectorSize = VCBTOHFS(vcb)->hfs_logical_block_size;
+ 
+ 	err = SearchExtentFile(vcb, fcb, offset, &foundKey, foundData, &foundIndex, &hint, &nextFABN);
++	if (err != noErr) {
++		printf("hfsdbg: MapFileBlockC cnid=%u off=%lld ff_blocks=%u -> %d\n",
++		    (unsigned)FTOC(fcb)->c_fileid, (long long)offset,
++		    (unsigned)fcb->ff_blocks, err);
++	}
+ 	if (err == noErr) {
+ 		startBlock = foundData[foundIndex].startBlock;
+ 		firstFABN = nextFABN - foundData[foundIndex].blockCount;
+@@ -1777,6 +1786,10 @@
+ 	}
+ 
+ Exit:
++	if (err != noErr) {
++		printf("hfsdbg: SearchExtentFile cnid=%u fabn=%u -> %d\n",
++		    (unsigned)FTOC(fcb)->c_fileid, (unsigned)filePositionBlock, err);
++	}
+ 	return err;
+ }
+ 
+--- a/bsd/sweet_hfs/core/hfs_btreeio.c
++++ b/bsd/sweet_hfs/core/hfs_btreeio.c
+@@ -202,6 +202,8 @@
+ 	}
+     
+     if (retval) {
++        printf("hfsdbg: GetBTreeBlock node=%u size=%u -> %d\n",
++            (unsigned)blockNum, (unsigned)block->blockSize, retval);
+     	if (bp)
+ 			buf_brelse(bp);
+         block->blockHeader = NULL;
+--- a/bsd/sweet_hfs/core/BTreeNodeOps.c
++++ b/bsd/sweet_hfs/core/BTreeNodeOps.c
+@@ -215,6 +215,8 @@
+ 
+ 	if (err != noErr)
+ 	{
++		printf("hfsdbg: GetNode node=%u total=%u -> %d\n",
++		    (unsigned)nodeNum, (unsigned)btreePtr->totalNodes, err);
+ 		Panic ("GetNode: getNodeProc returned error.");
+ 		goto ErrorExit;
+ 	}
+--- a/bsd/sweet_hfs/core/BTreeTreeOps.c
++++ b/bsd/sweet_hfs/core/BTreeTreeOps.c
+@@ -245,6 +245,8 @@
+         {
+                 goto ErrorExit;
+         }
++        printf("hfsdbg: SearchTree node=%u level=%d total=%u\n",
++            (unsigned)curNodeNum, (int)level, (unsigned)btreePtr->totalNodes);
+ 		
+         //
+         //	[2550929] Sanity check the node height and node type.  We expect
+@@ -334,6 +336,8 @@
+     //	fall into ErrorExit
+ 
+ ErrorExit:
++	printf("hfsdbg: SearchTree err=%d node=%u level=%d\n",
++	    err, (unsigned)curNodeNum, (int)level);
+ 	
+ 	*nodeNum					= 0;
+ 	nodePtr->buffer				= nil;
+--- a/bsd/sweet_hfs/core/hfs_readwrite.c
++++ b/bsd/sweet_hfs/core/hfs_readwrite.c
+@@ -3146,6 +3146,9 @@
+ 	if (lockExtBtree)
+ 		hfs_systemfile_unlock(hfsmp, lockflags);
+ 
++	if (retval != E_NONE) {
++		printf("hfsdbg: hfs_bmap bn=%lld -> %d\n", (long long)bn, retval);
++	}
+ 	if (retval == E_NONE) {
+ 		/* Figure out how many read ahead blocks there are */
+ 		if (runp != NULL) {

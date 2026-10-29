@@ -1,0 +1,162 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -1185,6 +1185,9 @@
+ 	 * treat them as if they were identical. Reverse-endian Mach-O
+ 	 * binaries are recognized but not compatible.
+ 	 */
++	printf("execdbg: imgact magic=0x%x cputype=0x%x subtype=0x%x filetype=0x%x ncmds=%u\n",
++	    mach_header->magic, mach_header->cputype, mach_header->cpusubtype,
++	    mach_header->filetype, mach_header->ncmds);
+ 	if ((mach_header->magic == MH_CIGAM) ||
+ 	    (mach_header->magic == MH_CIGAM_64)) {
+ 		error = EBADARCH;
+@@ -1283,6 +1286,9 @@
+ 
+ 	/* Copy in arguments/environment from the old process */
+ 	error = exec_extract_strings(imgp);
++	printf("execdbg: extract_strings errno=%d argc=%d argv=0x%lx envp=0x%lx\n",
++	    error, imgp->ip_argc, (unsigned long)imgp->ip_user_argv,
++	    (unsigned long)imgp->ip_user_envv);
+ 	if (error) {
+ 		goto bad;
+ 	}
+@@ -1315,6 +1321,9 @@
+ 	 * Actually load the image file we previously decided to load.
+ 	 */
+ 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
++	printf("execdbg: load_machfile lret=%d errno=%d unixproc=%d dynlinker=%d 64bit=%d platform=%d\n",
++	    lret, load_return_to_errno(lret), load_result.unixproc, load_result.dynlinker,
++	    load_result.is_64bit_addr, load_result.platform_binary);
+ 	if (lret != LOAD_SUCCESS) {
+ 		error = load_return_to_errno(lret);
+ 
+@@ -1620,6 +1629,7 @@
+ 	old_map = NULL;
+ 
+ 	lret = activate_exec_state(task, p, thread, &load_result);
++	printf("execdbg: activate_exec_state lret=%d error=%d\n", lret, error);
+ 	if (lret != KERN_SUCCESS) {
+ 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
+ 		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_ACTV_THREADSTATE, 0, 0);
+@@ -1703,6 +1713,7 @@
+ 	    load_result.lr_sdk);
+ 
+ 	error = exec_add_apple_strings(imgp, &load_result); /* copies out main thread port */
++	printf("execdbg: add_apple_strings errno=%d\n", error);
+ 
+ 	if (error) {
+ 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
+@@ -1728,6 +1739,8 @@
+ 		 */
+ 		ap = p->user_stack;
+ 		error = exec_copyout_strings(imgp, &ap);
++		printf("execdbg: copyout_strings errno=%d stack=0x%lx strspace=%d\n",
++		    error, (unsigned long)ap, imgp->ip_strspace);
+ 		if (error) {
+ 			vm_map_switch(old_map);
+ 
+@@ -1768,6 +1781,9 @@
+ 		}
+ 		error = task_set_dyld_info(task, load_result.all_image_info_addr,
+ 		    load_result.all_image_info_size);
++		printf("execdbg: task_set_dyld_info errno=%d addr=0x%lx size=%lu\n",
++		    error, (unsigned long)load_result.all_image_info_addr,
++		    (unsigned long)load_result.all_image_info_size);
+ 		if (error) {
+ 			vm_map_switch(old_map);
+ 
+@@ -2044,6 +2060,9 @@
+ 	goto done;
+ 
+ badtoolate:
++	printf("execdbg: imgact badtoolate error=%d reason=%lu spawn=%d\n",
++	    error, (exec_failure_reason != OS_REASON_NULL) ? (unsigned long)exec_failure_reason->osr_code : 0UL,
++	    spawn);
+ 	/* Don't allow child process to execute any instructions */
+ 	if (!spawn) {
+ 		{
+@@ -2074,6 +2093,7 @@
+ 	}
+ 
+ bad:
++	printf("execdbg: imgact bad error=%d\n", error);
+ 	/* If we hit this, we likely would have leaked an exit reason */
+ 	assert(exec_failure_reason == OS_REASON_NULL);
+ 	return error;
+@@ -2168,6 +2188,7 @@
+ 
+ again:
+ 	error = namei(ndp);
++	printf("execdbg: namei errno=%d\n", error);
+ 	if (error) {
+ 		if (error == ERESTART) {
+ 			error = EINTR;
+@@ -2197,6 +2218,8 @@
+ 	}
+ 
+ 	error = exec_check_permissions(imgp);
++	printf("execdbg: check_permissions errno=%d mode=0x%x\n", error,
++	    (imgp->ip_vattr ? (unsigned int)imgp->ip_vattr->va_mode : 0));
+ 	if (error) {
+ 		goto bad;
+ 	}
+@@ -2211,6 +2234,7 @@
+ 	    UIO_SYSSPACE, IO_NODELOCKED,
+ 	    vfs_context_ucred(imgp->ip_vfs_context),
+ 	    &resid, vfs_context_proc(imgp->ip_vfs_context));
++	printf("execdbg: vn_rdwr errno=%d resid=%d\n", error, resid);
+ 	if (error) {
+ 		goto bad;
+ 	}
+@@ -2301,6 +2325,7 @@
+ 		}
+ 	}
+ bad:
++	printf("execdbg: activate_image error=%d\n", error);
+ 	proc_transend(p, 0);
+ 
+ bad_notrans:
+@@ -5215,6 +5240,7 @@
+ 		proc_rele(p);
+ 	}
+ 
++	printf("execdbg: __mac_execve exit error=%d\n", error);
+ 	uthread_set_exec_data(current_uthread(), NULL);
+ 	kfree_type(typeof(*__execve_data), __execve_data);
+ 
+@@ -6769,6 +6795,7 @@
+ 	size_t path_length = strlen(path) + 1;
+ 	argv0 = scratch_addr;
+ 	error = copyout(path, argv0, path_length);
++	printf("execdbg: copyout(path) 0x%lx errno=%d\n", (unsigned long)argv0, error);
+ 	if (error) {
+ 		return error;
+ 	}
+@@ -6800,6 +6827,7 @@
+ 		argv64bit[2] = USER_ADDR_NULL;
+ 
+ 		error = copyout(argv64bit, scratch_addr, sizeof(argv64bit));
++		printf("execdbg: copyout(argv) 0x%lx errno=%d\n", (unsigned long)scratch_addr, error);
+ 		if (error) {
+ 			return error;
+ 		}
+@@ -6829,6 +6857,9 @@
+ 	set_security_token(p);
+ 
+ 	return execve(p, &init_exec_args, retval);
++	error = execve(p, &init_exec_args, retval);
++	printf("execdbg: execve(%s) errno=%d retval=%d\n", path, error, retval[0]);
++	return error;
+ }
+ 
+ static const char * init_programs[] = {
+@@ -6880,6 +6911,9 @@
+ 	mach_vm_size_t map_page_size = vm_map_page_size(map);
+ 
+ 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
++	printf("execdbg: argmap=%p cur_map=%p thread_map=%p scratch=0x%lx psize=0x%lx proc64=%d\n",
++	    map, current_map(), current_thread()->map, (unsigned long)scratch_addr,
++	    (unsigned long)map_page_size, proc_is64bit(p));
+ #if CONFIG_MEMORYSTATUS
+ 	(void) memorystatus_init_at_boot_snapshot();
+ #endif /* CONFIG_MEMORYSTATUS */

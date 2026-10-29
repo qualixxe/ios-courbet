@@ -81,13 +81,22 @@ def fetch():
     listing = subprocess.run(['git', '-C', str(REPO), 'ls-tree', '-r', '--name-only', 'FETCH_HEAD'],
         capture_output=True, text=True, check=True).stdout.splitlines()
     kernels = [p for p in listing if os.path.basename(p).startswith('kernel.')]
-    if not kernels:
-        sys.exit(f'no kernel.* on {BRANCH}: {listing[:5]}')
-    sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'FETCH_HEAD'],
+    # the commit subject carries the run id, which is the only proof that this is
+    # the build you just waited for and not last week's.
+    subject = subprocess.run(['git', '-C', str(REPO), 'log', '-1', '--format=%s', 'FETCH_HEAD'],
         capture_output=True, text=True, check=True).stdout.strip()
-    print(f'{BRANCH} @ {sha[:10]} -> {kernels[0]}')
+    print(f'{BRANCH} @ {subject!r}')
+    wanted = [p for p in kernels if os.path.basename(p) == 'kernel.development.sweet']
+    if not wanted:
+        wanted = [p for p in kernels if not p.endswith('.a')]
+    if not wanted:
+        sys.exit(f'no kernel.* on {BRANCH}: {listing[:5]}')
+    print(f'candidates: {kernels}')
+    sha = subprocess.run(['git', '-C', str(REPO), 'rev-parse', '--short', 'FETCH_HEAD'],
+        capture_output=True, text=True, check=True).stdout.strip()
+    print(f'{BRANCH} @ {sha} -> {wanted[0]}')
     with open(DEST, 'wb') as out:
-        subprocess.run(['git', '-C', str(REPO), 'cat-file', 'blob', f'FETCH_HEAD:{kernels[0]}'],
+        subprocess.run(['git', '-C', str(REPO), 'cat-file', 'blob', f'FETCH_HEAD:{wanted[0]}'],
             stdout=out, check=True)
 
 

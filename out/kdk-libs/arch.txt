@@ -1,0 +1,6 @@
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libT6000.os.DEVELOPMENT.a is architecture: arm64e
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libT6000.os.RELEASE.a is architecture: arm64e
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libT8101.os.DEVELOPMENT.a is architecture: arm64e
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libT8101.os.RELEASE.a is architecture: arm64e
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libVMAPPLE.os.DEVELOPMENT.a is architecture: arm64e
+Non-fat file: /Library/Developer/KDKs/KDK_13.5_22G74.kdk/System/Library/KernelSupport/libVMAPPLE.os.RELEASE.a is architecture: arm64e

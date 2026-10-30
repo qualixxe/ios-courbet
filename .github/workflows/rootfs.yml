@@ -100,7 +100,7 @@ jobs:
           set -euxo pipefail
           sudo modprobe loop 2>/dev/null || true
           sudo modprobe hfsplus 2>/dev/null || true
-          sudo bash tools/mkiosroot.sh dmgs/os.dmg dmgs/sysos.dmg dmgs/appos.dmg rootfs.img 16G 2>&1 | tee build.log
+          sudo env MKIOSROOT_TWEAKS=1 bash tools/mkiosroot.sh dmgs/os.dmg dmgs/sysos.dmg dmgs/appos.dmg rootfs.img 16G 2>&1 | tee build.log
           ls -lh rootfs.img
           sha256sum rootfs.img | tee rootfs.img.sha256
           gzip -6 -k rootfs.img

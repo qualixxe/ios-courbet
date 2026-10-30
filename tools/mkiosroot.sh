@@ -93,6 +93,28 @@ copy "$work/os/root" "$work/root" ${MKIOSROOT_OS_EXCLUDE:+--exclude-from="$MKIOS
 copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS" ${MKIOSROOT_SYSOS_EXCLUDE:+--exclude-from="$MKIOSROOT_SYSOS_EXCLUDE"}
 copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
 
+# CFBundle/NSBundle stat the .framework directory and read its Info.plist even
+# when dyld serves the Mach-O from the shared cache. With
+# /System/Library/Frameworks/CoreFoundation.framework absent, _CFBundleCreate
+# returns NULL (_CFBundleCreateIfLooksLikeBundle's stat/S_ISDIR check) and its
+# caller dies in _CFBundleGetInfoDictionary(NULL): the SpringBoard and
+# containermanagerd crash at CoreFoundation+0x7a6cc. The lite root drops the
+# framework trees' bulk, so re-create their directory structure and keep the
+# small plists; the cryptex is iOS's overlay over /System, hence both sources.
+for src in "$work/os/root" "$work/sysos/root"; do
+	echo "framework metadata from $src"
+	sudo rsync -aH --numeric-ids \
+		--include='/System/' --include='/System/Library/' \
+		--include='/System/Library/Frameworks/' --include='/System/Library/Frameworks/**/' \
+		--include='/System/Library/PrivateFrameworks/' --include='/System/Library/PrivateFrameworks/**/' \
+		--include='/System/Library/Frameworks/**/Info.plist' \
+		--include='/System/Library/Frameworks/**/InfoPlist.strings' \
+		--include='/System/Library/Frameworks/**/SubServerConfiguration.plist' \
+		--include='/System/Library/PrivateFrameworks/**/Info.plist' \
+		--include='/System/Library/PrivateFrameworks/**/InfoPlist.strings' \
+		--exclude='*' "$src/" "$work/root/"
+done
+
 # Shared cache where dyld looks at ignition level 1: hard links, no extra space.
 dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
 sudo mkdir -p "$work/root/System/Library/Caches/com.apple.dyld"
@@ -133,6 +155,15 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
+
+# Bring-up fixes that turned a plain mkiosroot output into images that reach
+# the home screen (containers tree, no panic-on-crash, Setup skipped, audio and
+# MediaToolbox workarounds): see tools/sweet-root-tweaks.py. Opt-in so the
+# plain image stays plain; MKIOSROOT_TWEAKS=1 in the image workflows.
+if [[ ${MKIOSROOT_TWEAKS:-0} == 1 ]]; then
+	echo 'applying tools/sweet-root-tweaks.py'
+	sudo python3 "$(dirname "$0")/sweet-root-tweaks.py" "$work/root"
+fi
 
 df -h "$work/root"
 sudo umount "$work/root"

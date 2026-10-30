@@ -5,6 +5,104 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-10-30) — SpringBoard's CFGetTypeID(NULL): the lite root has no .framework dirs
+
+**The userland crash is a missing directory, not a CF bug.** Run `qfull3` (patch
+0087 kernel, 6 GiB root) gets real launchd/dyld/SpringBoard running; SpringBoard
+then dies at `pc 0x198a7a6cc` (= CoreFoundation `+0x7a6cc` after subtracting the
+crash slide `0x11c18000`). That PC is inside a type-ID getter at CF`+0x7a674`
+(`tbz x0,#63; ldar [x0+8]; ubfx …#8,#0xa`), and x0 is NULL.
+
+Call chain, runtime addresses minus slide, symbolized against the cache:
+
+```
+BaseBoard method 0x18dd76ccc   sends -standardUserDefaults at +0x36d44
+  Foundation     0x181453b84 / 0x181451d48
+    CF 0x186e5c024 / 0x186ebfc90 / 0x186e4e2fc  (bundle info-dict helpers)
+      CF 0x186e3b300      helper: if dict["_CFBundleUseAppleLocalizations"] is true,
+                          CFURLCreateWithFileSystemPath(kCFAllocatorSystemDefault,
+                          CFSTR("/System/Library/Frameworks/CoreFoundation.framework"),
+                          posix, isDirectory=true) then _CFBundleCreate(alloc, url)
+        CF 0x186e8ae10    _CFBundleCreate -> 0x186e3c5c4
+          CF 0x186e8c658  _CFBundleGetInfoDictionary(NULL) -> getter(NULL) -> panic
+```
+
+The constant string was decoded in place: at `0x1df250730` (isa `__NSCFConstantString`,
+flags 0x7c8) chars `0x1870efd50`, length 0x33 = **/System/Library/Frameworks/CoreFoundation.framework**.
+`CFBundleCreate` (0x186e3c5c4) ends in `_CFBundleCreateIfLooksLikeBundle`: it
+`stat()`s the URL path (call at 0x186e3c678) and requires `S_IFDIR`
+(`and w8,#0xf000; cmp #0x4000` at 0x186e3c688); on failure it jumps to
+0x186e3c728 → `mov x19,#0` → returns **NULL**. The caller at CF`+0x53300`
+passes that NULL on unchecked. So: the bundle directory does not exist.
+
+It does not exist anywhere in the image: `tools/qemu-root-excludes.txt` drops
+`System/Library/Frameworks/` and `PrivateFrameworks/` from the OS root, and the
+SystemOS cryptex in this IPSW carries **no** framework trees (the image's
+`/private/preboot/Cryptexes/OS/System/Library/Frameworks` is present but empty).
+Verified missing on disk: `CoreFoundation.framework`, `MediaToolbox.framework`,
+`PrivateFrameworks/MobileContainerManager.framework` — containermanagerd crash-loops
+on the same PC (its own NULL CFString at CF`+0x66624`) after failing to find
+`MobileContainerManager`. SpringBoard itself and its Info.plist are on disk.
+
+**Fix (this commit):** `tools/mkiosroot.sh` now materializes the framework
+directory skeleton plus `Info.plist`, `InfoPlist.strings` and
+`SubServerConfiguration.plist` from both the OS root and the SystemOS cryptex
+(includes/excludes restrict the transfer; the Mach-Os still come from the dyld
+cache), and applies `tools/sweet-root-tweaks.py` when `MKIOSROOT_TWEAKS=1` —
+that is the upstream set that reached the home screen: containers tree under
+`/private/var/containers`, `_PanicOnCrasX`, no CommCenter jobs, Setup skipped,
+VirtualAudio off, MediaToolbox `StartRecorderServer=false`, migration and
+SpringBoard watchdogs. `qemu-fullroot.yml` and `rootfs.yml` set the flag.
+**Next:** download the rebuilt `qemu-fullroot` release, rerun
+`research\qemu-fullroot.bat`, and symbolize the next crash (containermanagerd's
+NULL string, if it survives SpringBoard's fix).
+
+## Handoff (2026-10-30) — errno 22 found: XNU's md driver truncates a 6 GiB RAMDisk to 2 GiB
+
+**Patch 0086 paid off on the first run.** The trace pinpointed the failing step:
+
+```
+hfsdbg: SearchTree node=283 level=3 total=13312      <- catalog root reads fine
+hfsdbg: SearchTree node=3   level=2 total=13312      <- index node reads fine
+hfsdbg: GetBTreeBlock node=12701 size=8192 -> 22     <- leaf does not
+hfsdbg: cat_lookupbykey parent=33 name_len=13 -> 22
+execdbg: namei errno=22
+```
+
+`MapFileBlockC`, `SearchExtentFile`, `FindExtentRecord` and `hfs_bmap` never
+printed, i.e. the HFS mapping **succeeded**; the EINVAL came from below, from
+the block device. Every failing node (12690, 12701, 13063, 13103) is a catalog
+B-tree node in **the 13th (last) extent of the catalog file**, and that extent
+is the only one on the volume above the 2 GiB mark:
+
+```
+idx startBlock  file offset  device byte  size
+  0      25650            0    105062400  8 MiB
+ ...
+ 11     433113     92274688   1774030848  8 MiB
+ 12     659483    100663296   2701242368  8 MiB   <- ALL failures live here
+     node 12690 (103956480) -> 2704535552
+     node 12701 (104046592) -> 2704625664
+     node 13063 (107012096) -> 2707591168
+     node 13103 (107339776) -> 2707918848
+```
+
+**The bug is in stock XNU, `bsd/dev/memdev.c`.** `struct mdev.mdSize` is a
+`uint32_t` counting 4 KiB pages, but every use computed the byte size as
+`mdev[devid].mdSize << 12` — a 32-bit shift. For a 6 GiB RAMDisk:
+`1572864 << 12 == 0x1_8000_0000`, truncated to `0x8000_0000` = **2 GiB**.
+So `mdevstrategy()` (md0, `rd=md0`) rejected every read at or past 2 GiB with
+`EINVAL`, and trimmed reads that crossed the boundary. The mount and all early
+catalog lookups live below 2 GiB, which is why the volume mounted, `exec`
+found `/usr`, `/sbin`, `/dev` — and died the moment a lookup needed the last
+catalog extent. `DKIOCGETBLOCKCOUNT`, `mdevrw` and `mdevgetrange` had the same
+truncation.
+
+Patch **0087** (`xnu/patches/0087-sweet-md-ramdisk-64bit-size.patch`) makes all
+eight sites 64-bit. This is a QEMU-harness bug, not a phone bug: the phone boots
+`rd=ufsroot0`, and `sweet_ufs_strategy()` already sizes its partition in
+`uint64_t` (`su.nblocks * UFS_BLOCK`).
+
 ## Handoff (2026-10-29) — patch 0085 was wrong; the full boot console is now readable; exec diagnostics in CI
 
 **The 10-28 "root cause" is retracted — it was a misreading and it was never tested.**

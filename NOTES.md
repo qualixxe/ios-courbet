@@ -5,6 +5,60 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-11-03, later) — containermanagerd's NULL formatter is the missing /usr/share (ICU data + tzinit inputs)
+
+**Found the resource behind the ICU failure.** `tools/qemu-root-excludes.txt`
+dropped `usr/share/` wholesale to fit 6 GiB. Inside the lite root that costs:
+
+- `libicucore.A.dylib` (dumped from the cache, 2,625,536 B) references
+  `/usr/share/icu/` and the split data packages `icudt70l`,
+  `icudt70l-lang/-curr/-region/-coll/-unit/-rbnf/-translit/-zone` — the
+  30,449,664 B `icudt70l.dat` lives in `/usr/share/icu/` in the OS dmg.
+  Without it ICU has no locale data: `udatpg_open`-style call CF+0xd8cd4
+  returns NULL, `_CFDateFormatterCreate` (CF+0x55f30) returns NULL, and
+  containermanagerd dereferences it at CF+0x7a6cc. Same class of failure
+  plausibly explains the dmd/mediaserverd/adprivacyd NSDateFormatter aborts.
+- `/usr/share/zoneinfo.default` (621 entries) and `/usr/share/icu/icutzformat.txt`
+  are the tzinit inputs. launchd embeds the early boot task
+  `<key>tzinit</key><string>/usr/libexec/tzinit</string>` with
+  `RequireSuccess=true`; tzinit's own strings read
+  `/usr/share/{zoneinfo.default,icu}` and write
+  `/var/db/timezone/{zoneinfo,icutz*,localtime,TZVersionDiffRecord}`.
+  Image check: `/private/var/db/timezone` (CNID 197742) contains only
+  `localtime`; the console shows `hfsdbg: lookup 'icutz' parent=197742 -> 2`
+  (lines 7080, 33694) and `lookup 'zoneinfo' parent=197742 -> 2`
+  (17418, 53043, 76251) — ENOENT both.
+
+Size audit from the OS dmg listing: `usr/share` is **65.95 MiB / 694 entries**
+(icu 29.04, tokenizer 19.44, morphun 6.73, firmware 6.23, langid 3.46,
+zoneinfo.default 0.96, locale/misc/progressui/CSI the rest); the image has
+39,745 free blocks = 155 MiB, so it fits. Fonts (349.9 MiB) and
+LinguisticData (616.3 MiB) do not and stay excluded.
+
+**Commit `24e98be`** removes the blanket `usr/share/` exclude (with a comment
+whose *why* is the ICU/tzinit chain); `qemu-fullroot.yml` run `41599652413`
+rebuilds the release image.
+
+**Kernel CI `41597818424` failed for a self-inflicted reason.** The x0–x28 /
+stack dump added to `0043` sat between `printf("%s\n", line);` and the closing
+`}` of `sweet_crash_log` — exactly the tail context that `0051` inserts
+`sweet_crash_strings` into. `git apply` failed, and since `0054` also touches
+`SweetFramebuffer.cpp` and `bsd/conf/files`, the failure cascaded into
+`0053 0054 0055 0056 0060 0062 0063 0066 0072 0073 0074 0075 0076 0077 0079
+0081` (21 skips). **`713ae8b`** moves the dump above the backtrace; the tail of
+`sweet_crash_log` is now byte-identical to the version `0051` applied to in the
+green Oct-30 run (`git diff a813427^:xnu/patches/0043…` shows only the move).
+`xnu` rebuild for `713ae8b` is the run to fetch next.
+
+**Next**: `python research/get-kernel.py` for the `713ae8b` kernel, rerun
+`research\qemu-fullroot.bat` against the **current** image for the register
+dump (containermanagerd x0–x28 + stack), then swap in the `41599652413`
+release image (`cat qfull-* > …gz`, sha256 from the release), boot again and
+check that `icutz`/`zoneinfo` lookups disappear, `/var/db/timezone/zoneinfo`
+appears, and the containermanagerd/dmd/mediaserverd/adprivacyd crash lines go
+away. `libicucore` is a shared-cache image, so no file is missing for dyld —
+only its data file was.
+
 ## Handoff (2026-11-03) — SpringBoard survives; the wall moved to containermanagerd's NULL CFDateFormatter
 
 **The `bbe84a5` lite root works.** Run `research/qfull` (kernel from the

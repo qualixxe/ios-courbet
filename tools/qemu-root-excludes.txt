@@ -10,7 +10,10 @@ System/Library/Assets/
 System/Library/AssetsV2/
 System/Library/Fonts/
 System/Library/LinguisticData/
-usr/share/
+# usr/share stays: libicucore reads /usr/share/icu/icudt70l(.dat) and launchd's
+# built-in tzinit job builds /var/db/timezone/{zoneinfo,icutz*} from
+# /usr/share/{zoneinfo.default,icu}. Without it CFDateFormatterCreate returns
+# NULL and containermanagerd/mediaserverd/dmd crash at boot.
 usr/local/
 usr/standalone/
 # keep: /bin /sbin /usr/lib /usr/libexec /etc /System/Library/LaunchDaemons

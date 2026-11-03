@@ -1,0 +1,110 @@
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -2188,7 +2188,8 @@
+ 
+ again:
+ 	error = namei(ndp);
+-	printf("execdbg: namei errno=%d\n", error);
++	printf("execdbg: exec %s -> namei errno=%d proc=%s pid=%d\n",
++		excpath ? excpath : "?", error, p->p_name, proc_getpid(p));
+ 	if (error) {
+ 		if (error == ERESTART) {
+ 			error = EINTR;
+--- a/bsd/sweet_hfs/core/BTreeTreeOps.c
++++ b/bsd/sweet_hfs/core/BTreeTreeOps.c
+@@ -245,8 +245,6 @@
+         {
+                 goto ErrorExit;
+         }
+-        printf("hfsdbg: SearchTree node=%u level=%d total=%u\n",
+-            (unsigned)curNodeNum, (int)level, (unsigned)btreePtr->totalNodes);
+ 		
+         //
+         //	[2550929] Sanity check the node height and node type.  We expect
+--- a/bsd/sweet_hfs/core/hfs_catalog.c
++++ b/bsd/sweet_hfs/core/hfs_catalog.c
+@@ -985,8 +985,10 @@
+ 	    *desc_cnid = cnid;
+ 	}
+ exit:
+-	printf("hfsdbg: cat_lookupbykey parent=%u name_len=%u -> %d\n",
+-	    (unsigned)keyp->hfsPlus.parentID, (unsigned)keyp->hfsPlus.nodeName.length, result);
++	if (result != 0) {
++		printf("hfsdbg: cat_lookupbykey parent=%u name_len=%u -> %d\n",
++		    (unsigned)keyp->hfsPlus.parentID, (unsigned)keyp->hfsPlus.nodeName.length, result);
++	}
+ 	hfs_free_type(iterator, struct BTreeIterator);
+ 	hfs_free_type(recp, CatalogRecord);
+ 
+--- a/bsd/sweet_hfs/core/hfs_lookup.c
++++ b/bsd/sweet_hfs/core/hfs_lookup.c
+@@ -224,7 +224,7 @@
+ 		lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
+ 
+ 		retval = cat_lookup(hfsmp, &cndesc, 0, force_casesensitive_lookup, &desc, &attr, &fork, NULL);
+-		{
++		if (retval != 0) {
+ 			char nbuf[40];
+ 			int nl = cnp->cn_namelen < 39 ? cnp->cn_namelen : 39;
+ 			bcopy(cnp->cn_nameptr, nbuf, nl);
+--- a/bsd/sweet_hfs/core/hfs_vfsops.c
++++ b/bsd/sweet_hfs/core/hfs_vfsops.c
+@@ -71,6 +71,7 @@
+  *
+  */
+ #include <sys/param.h>
++#include <sys/proc.h>
+ #include <sys/systm.h>
+ #include <sys/kauth.h>
+ 
+@@ -197,6 +198,15 @@
+ 		return (retval);
+ 	}
+ 	cmdflags = (u_int32_t)vfs_flags(mp) & MNT_CMDFLAGS;
++	{
++		char pname[32];
++		u_int64_t mflags = vfs_flags(mp);
++		proc_selfname(pname, sizeof(pname));
++		printf("hfsdbg: mount flags=0x%llx rootfs=%d rdonly=%d update=%d data=%d proc=%s\n",
++			    (unsigned long long)mflags, (mflags & MNT_ROOTFS) ? 1 : 0,
++			    (mflags & MNT_RDONLY) ? 1 : 0, (mflags & MNT_UPDATE) ? 1 : 0,
++			    data != 0, pname);
++	}
+ 	if (cmdflags & MNT_UPDATE) {
+ 		hfs_assert(data);
+ 
+@@ -522,6 +532,7 @@
+ 	}
+ 
+ out:
++	printf("hfsdbg: mount done retval=%d\n", retval);
+ 	if (retval == 0) {
+ 		(void)hfs_statfs(mp, vfs_statfs(mp), context);
+ 	}
+--- a/bsd/sweet_hfs/core/hfs_vnops.c
++++ b/bsd/sweet_hfs/core/hfs_vnops.c
+@@ -31,6 +31,7 @@
+ #include <sys/systm.h>
+ #include <sys/param.h>
+ #include <sys/kernel.h>
++#include <sys/proc.h>
+ #include <sys/dirent.h>
+ #include <sys/stat.h>
+ #include <sys/buf.h>
+@@ -6890,6 +6891,16 @@
+ #endif
+ 
+ exit:
++	{
++		char pname[32], nbuf[40];
++		int nl = cnp->cn_namelen < 39 ? cnp->cn_namelen : 39;
++		bcopy(cnp->cn_nameptr, nbuf, nl);
++		nbuf[nl] = 0;
++		proc_selfname(pname, sizeof(pname));
++		printf("hfsdbg: makenode %s parent=%u type=%d proc=%s -> %d\n",
++			    nbuf, (unsigned)VTOC(dvp)->c_fileid, vap ? (int)vap->va_type : -1,
++			    pname, error);
++	}
+ 	cat_releasedesc(&out_desc);
+ 	
+ #if CONFIG_PROTECT

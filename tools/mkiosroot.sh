@@ -166,6 +166,17 @@ if [[ ${MKIOSROOT_TWEAKS:-0} == 1 ]]; then
 fi
 
 df -h "$work/root"
+# A volume packed to 100 % is a volume where every runtime mkdir fails with
+# ENOSPC: the 0088 boot trace caught errno=28 on logd's log, SpringBoard's
+# MappedImageCache, mediaserverd's MediaCache and securityd's keychain-2.db.
+# Refuse to build such an image instead of losing a QEMU run to it.
+avail_kb=$(df -k --output=avail "$work/root" | tail -1 | tr -d ' ')
+echo "free blocks in the root volume: $((avail_kb / 1024)) MiB"
+if (( avail_kb < ${MKIOSROOT_MIN_FREE_KB:-262144} )); then
+	echo "ERROR: $((avail_kb / 1024)) MiB free is not enough for /var writes;" >&2
+	echo "       exclude more content or raise the image size" >&2
+	exit 1
+fi
 sudo umount "$work/root"
 # Linux hfsplus decomposes some non-ASCII names (localized Shortcuts examples)
 # differently from Apple's tables; let fsck_hfs rewrite them, then verify.

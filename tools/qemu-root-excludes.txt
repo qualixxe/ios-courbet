@@ -10,6 +10,18 @@ System/Library/Assets/
 System/Library/AssetsV2/
 System/Library/Fonts/
 System/Library/LinguisticData/
+# Free space, not more exclusions: a 6 GB volume packed to 100 % (build.log:
+# "6.0G used, 33M avail") makes every runtime mkdir fail with ENOSPC -- the 0088
+# trace showed errno=28 on logd.0.log, MappedImageCache (SpringBoard),
+# MediaCache (mediaserverd) and keychain-2.db (securityd). These trees are
+# asset payloads no boot path to the home screen reads: preinstalled
+# mobileassetd blobs, Siri flow plugins, watch-face bundles, Health assets and
+# carrier bundles (there is no baseband here). ~1.35 GiB back for /var writes.
+System/Library/PreinstalledAssetsV2/
+System/Library/Assistant/FlowDelegatePlugins/
+System/Library/NanoTimeKit/FaceBundles/
+System/Library/Health/
+System/Library/Carrier Bundles/
 # usr/share stays: libicucore reads /usr/share/icu/icudt70l(.dat) and launchd's
 # built-in tzinit job builds /var/db/timezone/{zoneinfo,icutz*} from
 # /usr/share/{zoneinfo.default,icu}. Without it CFDateFormatterCreate returns

@@ -201,7 +201,7 @@ class Volume:
         if rt == 1:
             return 88
         if rt == 2:
-            return 244
+            return 248
         if rt in (3, 4):
             return 10 + 2 * u16(data, 8)
         return len(data)

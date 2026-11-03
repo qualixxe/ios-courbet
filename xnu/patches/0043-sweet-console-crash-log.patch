@@ -1,6 +1,6 @@
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -820,6 +820,60 @@
+@@ -820,6 +820,80 @@
  	return exception_triage_thread(exception, code, codeCnt, thread);
  }
  
@@ -55,6 +55,26 @@
 +		fp = frame[0];
 +	}
 +	printf("%s\n", line);
++
++	/* Full register file and a stack window. A fault inside a leaf shows the
++	 * caller's saved arguments (formatter, locale, status) in that window. */
++	char regs[176];
++	for (int base = 0; base < 29; base += 8) {
++		int m = snprintf(regs, sizeof(regs), "CRASH %s x%d", name, base);
++		for (int i = base; i < base + 8 && i < 29; i++) {
++			m += snprintf(regs + m, sizeof(regs) - m, " 0x%llx", saved_state64(ss)->x[i]);
++		}
++		printf("%s\n", regs);
++	}
++	uint64_t sp = get_saved_state_sp(ss);
++	uint64_t words[64];
++	if (sp != 0 && (sp & 7) == 0 && copyin((user_addr_t)sp, words, sizeof(words)) == 0) {
++		for (int i = 0; i < 64; i += 8) {
++			printf("CRASH %s sp+0x%x 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n",
++			    name, i * 8, words[i], words[i + 1], words[i + 2], words[i + 3],
++			    words[i + 4], words[i + 5], words[i + 6], words[i + 7]);
++		}
++	}
 +}
 +#endif /* ARM64_BOARD_CONFIG_SWEET */
 +

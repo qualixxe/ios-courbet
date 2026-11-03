@@ -19,6 +19,8 @@ screen (image versions v8-v14 in NOTES.md):
   audio           VirtualAudio HAL plug-in disabled (mediaserverd crash)
   MediaToolbox    StartRecorderServer=false (camera filter prewarm calls a
                   NULL OpenGL function without a GPU -> mediaserverd crash loop)
+  timezone        /var/db/timezone/zoneinfo seeded from
+                  /usr/share/zoneinfo.default (tzinit never completes here)
   SpringBoard     BKNoWatchdogs (one slow CPU path, no scene-create watchdog
                   kills), no cloud-configuration UI
   Setup           skipped: SetupDone, SetupFinishedAllSteps, SetupVersion 11,
@@ -122,6 +124,36 @@ def audio(root):
         print('StartRecorderServer off', os.path.relpath(conf, root))
 
 
+def timezone(root):
+    """Seed /private/var/db/timezone the way tzinit leaves it.
+
+    tzinit is an embedded launchd Boot job (RequireSuccess) that copies
+    /usr/share/zoneinfo.default over /var/db/timezone/zoneinfo. On this root
+    the copy never happens: cnid 197742 (/private/var/db/timezone) holds only
+    the localtime symlink the DMG ships, and that symlink points into the
+    zoneinfo tree that is not there -- every client that resolves a zone
+    ENOENTs on 'zoneinfo'. Copying the tree in the image build removes the
+    dependency on tzinit running successfully at all.
+    """
+    src = os.path.join(root, 'usr/share/zoneinfo.default')
+    dst = os.path.join(root, 'private/var/db/timezone/zoneinfo')
+    if not os.path.isdir(src):
+        print('no /usr/share/zoneinfo.default to seed from')
+        return
+    if not os.path.isdir(dst):
+        shutil.copytree(src, dst, symlinks=True)
+    for dirpath, dirnames, filenames in os.walk(dst):
+        for name in dirnames:
+            os.chown(os.path.join(dirpath, name), 0, 0)
+            os.chmod(os.path.join(dirpath, name), 0o755)
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if not os.path.islink(path):
+                os.chown(path, 0, 0)
+                os.chmod(path, 0o644)
+    print('zoneinfo seeded:', len(glob.glob(os.path.join(dst, '**'), recursive=True)), 'entries')
+
+
 def main():
     if len(sys.argv) != 2 or not os.path.isdir(os.path.join(sys.argv[1], 'System/Library/xpc')):
         sys.exit(__doc__)
@@ -130,6 +162,7 @@ def main():
     containers(root)
     activation(root)
     audio(root)
+    timezone(root)
     merge_pref(root, 'com.apple.migration', {
         'LastSystemVersion': BUILD,
         'DMUserDataDisposition': {'SyntheticDidUpgrade': False, 'buildVersion': BUILD}})

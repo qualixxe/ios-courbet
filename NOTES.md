@@ -5,6 +5,74 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-11-03, latest) — root mounts RW, tzinit never runs, and the wall is ENOSPC
+
+Patch **0088** (`8b6c404`) instruments the boot instead of the hot paths: it
+deletes the `SearchTree node=` and success-path `cat_lookupbykey`/`lookup`
+prints, keeps them on failure only, adds `hfs_makenode` results (name, parent
+CNID, type, requesting process, errno) and one `hfs_mount` line (flags,
+rootfs/rdonly/update, proc). It also puts the executable path into the exec
+checkpoint (`execdbg: exec <path> -> namei errno=N proc=X pid=N`).
+
+**Measured (kernel `17,238,856 B`, QEMU lowmem ADT, 4 MiB ring):**
+
+- the whole 420 s boot now costs **908,994 B / 14,169 lines** and the entire
+  130 s boot **17,286 B** — the ring no longer overflows, so the early window
+  is finally readable (it used to saturate 4 MiB in ~173 s: SearchTree 55.4 %,
+  cat_lookupbykey 17.2 %, lookup 14.3 % = 87 % success noise).
+- `hfsdbg: mount flags=0x4005000 rootfs=1 rdonly=0 update=0 data=0 proc=kernel_task`
+  + `mount done retval=0` → **the root is read-write**. The "root is RO" theory
+  for the failed daemon writes is dead.
+- launchd's Boot task list was captured in full and **contains no `tzinit`**
+  (nor `auearlyboot`): tzinit does not fail here, it is never run. Fixed
+  image-side instead — `tools/sweet-root-tweaks.py timezone()` seeds
+  `/private/var/db/timezone/zoneinfo` from `/usr/share/zoneinfo.default`
+  (commit `5f38e78`), so nothing depends on tzinit any more.
+- **188 exec attempts**: `xpcproxy` ×99, `fairplayd.H2` ×5, `mediaserverd` ×4,
+  `bluetoothd` ×3, `logd` ×2, and **SpringBoard is exec'd**
+  (`/System/Library/CoreServices/SpringBoard.app/SpringBoard`).
+- 20 execs fail with ENOENT because the lite root excludes the Frameworks that
+  hold the binaries: identityservicesd, passd, healthd, apsd, chronod,
+  aggregated, awdd, biomed, contextstored, assistantd, nanoprefsyncd,
+  mobiletimerd, sleepd, CommCenter, imagent, softwareupdated, mediaremoted,
+  AppleCredentialManagerDaemon, HorizonSetup. Their XPC clients will keep
+  failing until either the binaries move out of the excluded trees or the
+  exclusions shrink.
+- crashes down to **6** in the 420 s window (mediaserverd 3, logd 1,
+  driverkitd 1) against 55 in the old saturated 173 s window; containermanagerd
+  now succeeds at every `makenode` it attempts (Caches, Library, Documents,
+  tmp, SystemData, `.com.apple.mobile_container_manager.metadata.plist` → 0),
+  which is the `/usr/share` restore working.
+
+**The real remaining wall is ENOSPC.** `makenode ... -> 28` for
+`logd.0.log`, `version.plist.tmp` (logd), `MappedImageCache` (SpringBoard),
+`MediaCache` (mediaserverd), `keychain-2.db` (securityd),
+`com.apple.bluetoothd` — and `build.log` says why: `6.0G used, 33M avail,
+100 %`. `research/hfs-check.py` agrees: 8,975 free blocks = **35.1 MiB** on a
+volume holding 5,967 MiB of files. New tool `research/qfull/sizes.py` sums
+allocated blocks per prefix against the raw image (no mount): 668 MiB
+`System/Library/PreinstalledAssetsV2/RequiredByOs`, 348 MiB
+`Assistant/FlowDelegatePlugins`, 169 MiB `NanoTimeKit/FaceBundles`, 156 MiB
+`Health/`, 45 MiB `Carrier Bundles`, ~450 MiB `/private/var/staged_system_apps`.
+
+`c93a5a4` drops the first five (asset payloads no path to the home screen
+reads) → ~1.35 GiB free for `/var`, and `mkiosroot.sh` now refuses to publish
+an image with less than `MKIOSROOT_MIN_FREE_KB` (default 256 MiB) free, so a
+100 %-full root cannot be built again by accident. CI run `41618865535`.
+
+**Next action (in order)**
+
+1. Read `research/qfull/console-tz420.txt` (the zoneinfo-seeded image, still
+   35 MiB free): confirm `lookup 'zoneinfo' parent=197742 -> 2` is gone and see
+   which crashes survive once tz/ICU resolve.
+2. Download the `c93a5a4` image (release `qemu-fullroot`, verify the sha256),
+   boot 420 s and check that the ENOSPC lines disappear and SpringBoard gets
+   past `MappedImageCache`.
+3. Then the remaining unknown is the literal uncaught-exception text: launchd
+   points a job's stderr at an os_log pipe, so libobjc's "Terminating app due
+   to uncaught exception …" never reaches the ring. Give the crash suspects
+   `StandardErrorPath=/dev/console` in the image build to make them say it.
+
 ## Handoff (2026-11-03, later) — containermanagerd's NULL formatter is the missing /usr/share (ICU data + tzinit inputs)
 
 **Found the resource behind the ICU failure.** `tools/qemu-root-excludes.txt`

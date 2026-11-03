@@ -73,6 +73,20 @@ an image with less than `MKIOSROOT_MIN_FREE_KB` (default 256 MiB) free, so a
    to uncaught exception …" never reaches the ring. Give the crash suspects
    `StandardErrorPath=/dev/console` in the image build to make them say it.
 
+**Step 1 done — the seed works, and the tz image boots further.**
+`console-tz420.txt` (2,762,343 B, 44,682 lines, device clock 16:00:32 →
+16:04:57 = 4 m 25 s of boot, against 2 m 04 s for the unseeded image in the
+same wall time): `lookup 'zoneinfo'` ENOENT count **0** (was repeated), only
+3 `lookup 'icutz' parent=197737 -> 2` remain. SpringBoard is again
+`job state = running` with no CRASH of its own. What did not change is the
+volume: **372 `-> 28` ENOSPC lines**, now dominated by `mobileactivationd
+mobileactivationd` (168), `securityd keychain-2.db` (44), `mediaserverd
+MediaCache` (34), `bluetoothd` (25), `dmd` (40), and the crash total rose to
+88 (mediaserverd 34, dmd 20, mobileactivation 18, adprivacyd 15) precisely
+because the boot now gets far enough to reach them. Free space is therefore
+not a polish item -- it is what the whole userland is blocked on, which is
+exactly what `c93a5a4` fixes.
+
 ## Handoff (2026-11-03, later) — containermanagerd's NULL formatter is the missing /usr/share (ICU data + tzinit inputs)
 
 **Found the resource behind the ICU failure.** `tools/qemu-root-excludes.txt`

@@ -423,7 +423,7 @@ def main():
             os.unlink(f'{out}/fb.raw')
             if log_save:
                 blob = open(log_save[2], 'rb').read()
-                open(f'{out}/console.txt', 'w').write(
+                open(f'{out}/console.txt', 'w', encoding='utf-8', errors='replace').write(
                     console_text(blob, log_save[3], log_save[4], log_save[0]))
                 os.unlink(log_save[2])
         else:

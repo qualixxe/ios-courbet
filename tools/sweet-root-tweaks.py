@@ -21,6 +21,10 @@ screen (image versions v8-v14 in NOTES.md):
                   NULL OpenGL function without a GPU -> mediaserverd crash loop)
   timezone        /var/db/timezone/zoneinfo seeded from
                   /usr/share/zoneinfo.default (tzinit never completes here)
+  stderr->console the daemons that crash-loop get StandardErrorPath, because
+                  launchd otherwise points a job's stderr at an os_log pipe and
+                  libobjc's "Terminating app due to uncaught exception 'X',
+                  reason: '...'" text never reaches the kernel log ring
   SpringBoard     BKNoWatchdogs (one slow CPU path, no scene-create watchdog
                   kills), no cloud-configuration UI
   Setup           skipped: SetupDone, SetupFinishedAllSteps, SetupVersion 11,
@@ -154,6 +158,38 @@ def timezone(root):
     print('zoneinfo seeded:', len(glob.glob(os.path.join(dst, '**'), recursive=True)), 'entries')
 
 
+# launchd keeps a job's stderr on an os_log pipe, so the text libobjc writes
+# when it aborts -- "Terminating app due to uncaught exception 'X', reason:
+# '...'" -- never reaches the console ring and every SIGABRT loop here was
+# unreadable. StandardErrorPath is the documented per-job override; /dev/console
+# is what _cnputs() puts into the log ring patch 0088 made room in. Naming only
+# the observed crashers keeps the ring for the boot trace.
+LOUD = ('com.apple.dmd', 'com.apple.mediaserverd', 'com.apple.adprivacyd',
+        'com.apple.ap.adprivacyd', 'com.apple.mobileactivationd',
+        'com.apple.containermanagerd', 'com.apple.driverkitd',
+        'com.apple.SpringBoard', 'com.apple.purplebuddy')
+
+
+def daemon_console(root):
+    told = []
+    dirs = ('System/Library/LaunchDaemons', 'Library/LaunchDaemons',
+            'System/Library/Containers/com.apple.SpringBoard/Data/Library/LaunchDaemons')
+    for d in dirs:
+        for path in sorted(glob.glob(os.path.join(root, d, '*.plist'))):
+            try:
+                data = load(path)
+            except Exception:
+                continue
+            label = data.get('Label') or os.path.basename(path)[:-6]
+            if label not in LOUD or data.get('StandardErrorPath') == '/dev/console':
+                continue
+            st = os.stat(path)
+            data['StandardErrorPath'] = '/dev/console'
+            save(path, data, st.st_uid, st.st_gid, st.st_mode & 0o7777, plistlib.FMT_XML)
+            told.append(label)
+    print('stderr -> /dev/console:', ', '.join(told) if told else 'nothing new')
+
+
 def main():
     if len(sys.argv) != 2 or not os.path.isdir(os.path.join(sys.argv[1], 'System/Library/xpc')):
         sys.exit(__doc__)
@@ -163,6 +199,7 @@ def main():
     activation(root)
     audio(root)
     timezone(root)
+    daemon_console(root)
     merge_pref(root, 'com.apple.migration', {
         'LastSystemVersion': BUILD,
         'DMUserDataDisposition': {'SyntheticDidUpgrade': False, 'buildVersion': BUILD}})

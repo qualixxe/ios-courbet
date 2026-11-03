@@ -5,6 +5,49 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-11-03) — SpringBoard survives; the wall moved to containermanagerd's NULL CFDateFormatter
+
+**The `bbe84a5` lite root works.** Run `research/qfull` (kernel from the
+`bbe84a5` CI build, 6 GiB image): SpringBoard spawns as pid 5 at `00:00:44`,
+reaches `job state = running` at `00:01:17`, and never prints a `CRASH` line;
+the old fault `pc 0x198a7a6cc` is gone. The boot console ends at `00:02:51`
+mid-`CarouselPreferenceServices` lookups, still with SpringBoard alive.
+
+**What still crashes** — 90 `CRASH` lines: dmd 32, mediaserverd 19, adprivacyd
+19, containermanagerd 16, driverkitd 4. driverkitd is `SIGKILL` (launchd
+timeout). The rest are `SIGABRT` through libc++abi:
+`std::terminate` (+0x133d4/+0x13424) → `abort_message` (+0x13f54) → `abort`
+(libsystem_c+0x1c4b8) → `raise` → `_pthread_kill` → `__pthread_kill`
+(libsystem_kernel+0x7198, sig 6). dmd/mediaserverd/adprivacyd frames differ;
+containermanagerd is the known CF chain:
+
+```
+pc  CF+0x7a6cc   getter: ldr w8,[x0,#8] with x0 = NULL, far 0x8
+lr  CF+0x66624   _CFDateFormatterSetFormat(NULL, fmt)
+ret CF+0xcd9d0   CFDateFormatterCreateISO8601Formatter
+```
+
+`_CFDateFormatterCreate` (CF+0x55f30) allocates the formatter even with a NULL
+locale and returns NULL only after the ICU check at `0x186e3e224`
+(`ldr x21,[x22,#0x998]`, status `[sp+0x34]`): the `UDateFormat` is absent.
+SpringBoard uses the same CF and is fine, so the question is why ICU fails in
+this process — the answer is on the caller's stack.
+
+**Parser bug found on the way (tooling, not the image).** `research/hfs-check.py`
+returned 244 bytes for an `HFSPlusCatalogFile`, but the record is 248
+(88 + two 80-byte forks). For a file record that is last in its B-tree node the
+trim-to-real-size path then shifted the data fork by 4 bytes: the main
+`dyld_shared_cache_arm64` read as size 0 with extents `(96, 849081)` swapped.
+Fixed to 248 (`c03017f`); the cache is intact — 393 216 B, extents
+`(849081, 96)`, hardlinked into both the dyld cache and the cryptex copies.
+
+**Crash logger extended** (`d085a3e`, patch 0043): after the backtrace it now
+prints x0–x28 and 64 words at `sp` (the fault is a leaf, so the caller's saved
+locale/formatter/status live in that window). CI run `41597310576` builds it.
+**Next:** `python research/get-kernel.py` (refuses a stale kernel), rerun
+`research\qemu-fullroot.bat`, read the containermanagerd register/stack dump.
+No phone work — the phone is not connected.
+
 ## Handoff (2026-10-30) — SpringBoard's CFGetTypeID(NULL): the lite root has no .framework dirs
 
 **The userland crash is a missing directory, not a CF bug.** Run `qfull3` (patch

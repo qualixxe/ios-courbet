@@ -3,6 +3,6 @@
 @@ -399,3 +399,5 @@
  		s->release();
  	}
-+	/* command-mode panel needs a kick after the CPU flush to panel memory */
-+	*(volatile uint32_t *)0xae2204 = 1;
++	/* courbet: panel scans out the ABL framebuffer in video mode; the
++	 * old command-mode SDE kick at 0xae2204 is unmapped and panics. */
  }

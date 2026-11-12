@@ -25,7 +25,7 @@ console ring of xnu/patches/0047 (`_sweet_log_ring`), its whole content is
 read straight out of guest RAM and written to console.txt — every line that
 ever reached the console, in order, including the ones already scrolled away.
 """
-import argparse, json, os, shutil, socket, struct, subprocess, sys, time, zlib
+import argparse, binascii, json, os, shutil, socket, struct, subprocess, sys, time, zlib
 
 FB_BASE, FB_W, FB_H = 0x9c000000, 1080, 2400
 FB_STRIDE = FB_W * 4
@@ -260,6 +260,59 @@ def qmp(target, *cmds, pmemsave=None):
     return out
 
 
+class GdbStub:
+    """Minimal gdb remote-protocol client: physical-memory writes into QEMU."""
+    def __init__(self, target, connect_timeout=2.0):
+        self.s = socket.create_connection(target, timeout=connect_timeout)
+        self.s.settimeout(60)
+        self.s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.buf = b''
+        self.packet_size = 0x10000
+        r = self.send(b'qSupported')
+        for part in r.split(b';'):
+            if part.startswith(b'PacketSize='):
+                try:
+                    self.packet_size = int(part.split(b'=', 1)[1], 16)
+                except ValueError:
+                    pass
+        self.send(b'Qqemu.PhyMemMode:1')
+
+    def _recv(self):
+        while True:
+            while self.buf[:1] in (b'+', b'-'):
+                self.buf = self.buf[1:]
+            if self.buf[:1] == b'$':
+                h = self.buf.find(b'#')
+                if h >= 0 and len(self.buf) >= h + 3:
+                    payload = self.buf[1:h]
+                    self.buf = self.buf[h + 3:]
+                    return payload
+            chunk = self.s.recv(1 << 16)
+            if not chunk:
+                raise EOFError('gdbstub closed')
+            self.buf += chunk
+
+    def send(self, payload):
+        pkt = b'$' + payload + b'#' + (b'%02x' % (sum(payload) & 0xff))
+        self.s.sendall(pkt)
+        return self._recv()
+
+    def write(self, addr, data):
+        chunk = max(0x400, min(0x10000, (self.packet_size - 0x40) // 2))
+        mv = memoryview(data)
+        for off in range(0, len(data), chunk):
+            part = mv[off:off + chunk].tobytes()
+            r = self.send(b'M%x,%x:' % (addr + off, len(part)) + binascii.hexlify(part))
+            if r != b'OK':
+                raise RuntimeError(f'gdb write {addr + off:#x}: {r[:40]!r}')
+
+    def close(self):
+        try:
+            self.s.close()
+        except OSError:
+            pass
+
+
 def console_text(blob, ring_pa, total_pa, start):
     """Rebuild the kernel console ring (xnu/patches/0047) from a guest-RAM dump.
 
@@ -307,6 +360,11 @@ def main():
     ap.add_argument('outdir', nargs='?', help='Output directory for fb.png, regs.txt, and logs')
     ap.add_argument('--secs', type=float, default=20, help='Duration to run QEMU in seconds (default: 20)')
     ap.add_argument('--gdb', action='store_true', help='start halted, gdb stub on :1234, no timeout')
+    ap.add_argument('--gdb-load', action='store_true',
+                    help='load ram.bin through the gdbstub, not -device loader (saves a host 6 GB buffer)')
+    ap.add_argument('--logo', help='BGRA 1080x2400 splash painted after --logo-delay; mutes the text console')
+    ap.add_argument('--logo-delay', type=float, default=12.0,
+                    help='seconds after the CPU starts before painting --logo (default: 12)')
     ap.add_argument('--hmp', action='append', default=[], help='extra monitor command run after stop (repeatable), e.g. "x /8gx 0xfffffe..."')
     ap.add_argument('--cpu', default='cortex-a76', help='QEMU CPU model (default: cortex-a76)')
     ap.add_argument('--kernel', help='matching unstripped kernel, for exact framebuffer text decoding (built-in Mach-O nm)')
@@ -335,6 +393,7 @@ def main():
     p = Payload(a.payload)
     font = None
     log_syms = {}
+    mute_syms = []
     if a.kernel:
         syms = macho_defined_syms(a.kernel)
         fonts = [v for v, n in syms if n == '_iso_font']
@@ -342,6 +401,7 @@ def main():
             ap.error('kernel must contain exactly one _iso_font symbol')
         font = p.data_by_va(fonts[0], 256 * 16)
         log_syms = {n: v for v, n in syms if n in ('_sweet_log_ring', '_sweet_log_total')}
+        mute_syms = [v for v, n in syms if n == '_sweet_console_muted']
     os.makedirs(a.outdir, exist_ok=True)
     out = os.path.abspath(a.outdir)
 
@@ -350,11 +410,23 @@ def main():
     print(f'phys_base={phys_base:#x} boot_args={ba_pa:#x} entry={entry_pa:#x} top={top:#x}',
           file=sys.stderr)
 
+    delta = phys_base - p.virt_base
+    logo_pa = None
+    logo_img = None
+    if a.logo:
+        if not a.kernel:
+            ap.error('--logo requires --kernel')
+        if len(mute_syms) != 1:
+            ap.error('kernel must contain exactly one _sweet_console_muted symbol')
+        logo_pa = mute_syms[0] + delta
+        logo_img = open(a.logo, 'rb').read()
+        if len(logo_img) != FB_STRIDE * FB_H:
+            ap.error(f'--logo must be {FB_STRIDE * FB_H} bytes (BGRA 1080x2400)')
+
     # The payload is placed with no slide (kernel VA virt_base -> phys_base), so
     # any static kernel address maps to physical by the same delta.
     log_save = None
     if len(log_syms) == 2:
-        delta = phys_base - p.virt_base
         ring_pa = log_syms['_sweet_log_ring'] + delta
         total_pa = log_syms['_sweet_log_total'] + delta
         start = min(ring_pa, total_pa) & ~(PAGE - 1)
@@ -370,6 +442,20 @@ def main():
         if os.path.exists(mon):
             os.unlink(mon)
         qmp_arg = f'unix:{mon},server,nowait'
+
+    # The gdbstub is used for two things: --gdb-load writes ram.bin straight
+    # into guest RAM (no host-side copy of the 6 GB ramdisk), and --logo pauses
+    # the guest to paint the boot splash and set sweet_console_muted=1.
+    gdb_arg = None
+    gdb_port = None
+    if a.gdb:
+        gdb_arg = 'tcp::1234'
+    elif a.gdb_load or a.logo:
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            gdb_port = probe.getsockname()[1]
+        gdb_arg = f'tcp:127.0.0.1:{gdb_port}'
+
     # virt RAM starts at 0x40000000. It must cover both the kernel's declared
     # RAM (phys_base + mem_size) and everything loaded into it — a multi-GB
     # ramdisk pushes `top` (ADT + boot_args end) past the declared RAM end.
@@ -377,28 +463,91 @@ def main():
     ram_gib = max(4, -(-(max(phys_base + mem_size, top) - 0x40000000) // (1 << 30)))
     cmd = ['qemu-system-aarch64', '-M', 'virt,gic-version=3', '-cpu', a.cpu, '-smp', '1', '-m', f'{ram_gib}G',
            '-nographic', '-serial', f'file:{out}/serial.txt', '-qmp', qmp_arg,
-           '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot',
-           '-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on',
-           '-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
-           '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
-    if a.gdb:
-        cmd += ['-S', '-gdb', 'tcp::1234']
+           '-d', 'int,guest_errors,unimp', '-D', f'{out}/qemu.log', '-no-reboot']
+    if a.gdb or a.gdb_load:
+        cmd += ['-S']
+    if gdb_arg:
+        cmd += ['-gdb', gdb_arg]
+    if not a.gdb_load:
+        cmd += ['-device', f'loader,file={out}/ram.bin,addr={phys_base:#x},force-raw=on']
+    cmd += ['-device', f'loader,file={out}/stub.bin,addr={STUB_PA:#x},force-raw=on',
+            '-device', f'loader,addr={STUB_PA:#x},cpu-num=0']
 
     p = None
+    gdb = None
     serial_file = f'{out}/serial.txt'
     serial_pos = 0
 
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
         if a.gdb:
-            print('gdb stub on :1234; QMP socket:', mon, file=sys.stderr)
+            print(f'gdb stub on {gdb_arg}; QMP socket:', mon, file=sys.stderr)
             p.wait()
             return 0
 
+        if a.gdb_load or a.logo:
+            deadline = time.time() + 180
+            while True:
+                try:
+                    gdb = GdbStub(('127.0.0.1', gdb_port))
+                    break
+                except (OSError, EOFError):
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.5)
+            print(f'[*] gdb stub connected on port {gdb_port}', file=sys.stderr)
+
+        if a.gdb_load:
+            total = os.path.getsize(f'{out}/ram.bin')
+            print(f'[*] gdb: writing {total/1e9:.2f} GB into guest RAM...', file=sys.stderr)
+            with open(f'{out}/ram.bin', 'rb') as f:
+                off = 0
+                next_report = 1 << 30
+                while True:
+                    data = f.read(1 << 20)
+                    if not data:
+                        break
+                    if data.count(0) != len(data):
+                        gdb.write(phys_base + off, data)
+                    off += len(data)
+                    if off >= next_report:
+                        print(f'    gdb: {off/1e9:.2f} / {total/1e9:.2f} GB', file=sys.stderr)
+                        next_report += 1 << 30
+            print('[*] gdb: RAM loaded; starting the CPU', file=sys.stderr)
+            qmp(mon, 'cont')
+
         t0 = time.time()
+        logo_done = False
+        logo_drawn = False
+        logo_at = t0 + a.logo_delay
         while p.poll() is None and time.time() - t0 < a.secs:
             if a.live_serial:
                 serial_pos = stream_serial_file(serial_file, serial_pos)
+            if a.logo and not logo_done and time.time() >= logo_at:
+                logo_done = True
+                qmp(mon, 'stop', pmemsave=[log_save[:3]] if log_save else None)
+                paint = True
+                if log_save:
+                    blob = open(log_save[2], 'rb').read()
+                    text = console_text(blob, log_save[3], log_save[4], log_save[0])
+                    try:
+                        os.unlink(log_save[2])
+                    except OSError:
+                        pass
+                    if 'panic' in text.lower():
+                        paint = False
+                        print('[!] logo: panic in console ring; not painting over it', file=sys.stderr)
+                if paint and gdb is not None:
+                    gdb.write(logo_pa, struct.pack('<I', 1))
+                    gdb.write(FB_BASE, logo_img)
+                    logo_drawn = True
+                    print('[*] logo: painted; text console muted', file=sys.stderr)
+                    qmp(mon, pmemsave=[(FB_BASE, FB_STRIDE * FB_H, f'{out}/fb-logo.raw')])
+                    splash = open(f'{out}/fb-logo.raw', 'rb').read()
+                    write_png(f'{out}/fb-logo.png', splash)
+                    os.unlink(f'{out}/fb-logo.raw')
+                    print(f'[*] logo: snapshot in {out}/fb-logo.png', file=sys.stderr)
+                qmp(mon, 'cont')
             time.sleep(0.2)
 
         if a.live_serial:
@@ -411,21 +560,31 @@ def main():
                 saves.append(log_save[:3])
             _, regs, *extra = qmp(mon, 'stop', 'info registers', *a.hmp, pmemsave=saves)
             open(f'{out}/regs.txt', 'w').write(regs + ''.join(f'\n(qemu) {c}\n{r}' for c, r in zip(a.hmp, extra)))
+            if gdb is not None:
+                gdb.close()
+                gdb = None
             p.kill()
             p.wait()
             raw = open(f'{out}/fb.raw', 'rb').read()
             write_png(f'{out}/fb.png', raw)
             result = {'status': 'not_decoded'}
+            unknown = 0
             if font is not None:
                 screen, unknown = decode_screen(raw, font)
                 open(f'{out}/fb.txt', 'w').write(screen)
                 result = screen_result(screen, unknown)
             os.unlink(f'{out}/fb.raw')
+            console = ''
             if log_save:
                 blob = open(log_save[2], 'rb').read()
-                open(f'{out}/console.txt', 'w', encoding='utf-8', errors='replace').write(
-                    console_text(blob, log_save[3], log_save[4], log_save[0]))
+                console = console_text(blob, log_save[3], log_save[4], log_save[0])
+                open(f'{out}/console.txt', 'w', encoding='utf-8', errors='replace').write(console)
                 os.unlink(log_save[2])
+            if logo_drawn:
+                # The screen now holds the splash, so glyph decoding is meaningless;
+                # the ring still tells us whether the kernel actually panicked.
+                result = {'status': 'panic' if 'panic' in console.lower() else 'logo_drawn',
+                          'unknown_glyphs': unknown, 'snapshot_only': True}
         else:
             print(f'qemu exited early: {p.returncode}', file=sys.stderr)
 
@@ -448,6 +607,11 @@ def main():
             p.wait()
         return 130
     finally:
+        if gdb is not None:
+            try:
+                gdb.close()
+            except Exception:
+                pass
         ram_file = f'{out}/ram.bin'
         if os.path.exists(ram_file):
             try:

@@ -5,6 +5,38 @@ to Xiaomi Mi 11 Lite 4G (`courbet`). Upstream: https://github.com/dipa-studio/io
 (read-only clone `ios-sweet-upstream`, HEAD `45263be`). The old ios-sweet log is
 `NOTES-sweet.md` — it describes **sweet**; treat its hardware facts as history.
 
+## Handoff (2026-11-12, latest) -- the Apple logo is on screen in QEMU
+
+The QEMU boot now shows the real iOS boot logo.  It is not a host overlay:
+`tools/qemu-sweet.py --gdb-load` writes the 6.48 GB payload straight into
+guest RAM through QEMU's gdbstub (physical mode, no second host copy of the
+ramdisk), then `--logo research/logo/applelogo-1080x2400.bgra` stops the guest
+at 12 s, writes `sweet_console_muted=1` and the 1080x2400 BGRA splash into the
+framebuffer, and snapshots it with QMP `pmemsave` to `fb-logo.png`.
+
+**Measured** (`research/qfull-logo/`, 420 s, 6.48 GB gdb load):
+
+- result `logo_drawn`, 65,328 console lines, **0 panic, 0 ENOSPC**;
+- SpringBoard is alive (FrontBoard/ControlCenter dirs, AKS selectors,
+  springboard.plist); no uncaught-exception lines.  The final `fb.png` is black
+  (userland repainted the panel) -- the splash is `fb-logo.png`; the harness
+  snapshot is `fb-logo.png`, not the final screen;
+- gdb physical writes run at ~20 MB/s at PacketSize 0x20020; 6.48 GB loads in
+  ~5.5 min.
+
+Kernel patch **0089** (`sweetlogo=1`, real `applelogo@3x` 194x238 in a 450x450
+canvas) is committed in `fd9712c`.  `macos-14` runners are retired; plain
+`macos-15` is arm64 and its hosted pool cancelled job `131274994943` after
+15 min ("not acquired by Runner ... capacity constraints"), so the workflow now
+targets `macos-15-intel`.  That image has Xcode 16.x only; if the build fails on
+`IORPC.kernelContent` (the old comment's warning), backport the field from newer
+xnu before spending more runs.
+
+**Next:** run the CI kernel on `macos-15-intel`; install it with
+`research/get-kernel.py`; boot the same payload with `sweetlogo=1` (no gdb
+logo) to prove the in-kernel splash; then phone bring-up when courbet is
+connected and the user approves the destructive step.
+
 ## Handoff (2026-11-03, latest) — root mounts RW, tzinit never runs, and the wall is ENOSPC
 
 Patch **0088** (`8b6c404`) instruments the boot instead of the hot paths: it

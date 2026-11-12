@@ -37,10 +37,12 @@ env:
 
 jobs:
   build:
-    # macOS 14 runners were retired in Nov 2026.  macOS 15 is the supported
-    # image; it has Xcode 16.x only (no Xcode 15), so the xnu-8796 iig ABI
-    # may need the IORPC.kernelContent backport that newer xnu has.
-    runs-on: macos-15
+    # macOS 14 runners were retired in Nov 2026.  The plain macos-15 label is
+    # arm64 and its hosted pool is capacity-limited (job 131274994943 waited
+    # 15 min and was cancelled); macos-15-intel matches the old x86_64 build.
+    # It has Xcode 16.x only, so the xnu-8796 iig ABI may need the
+    # IORPC.kernelContent backport that newer xnu has.
+    runs-on: macos-15-intel
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
